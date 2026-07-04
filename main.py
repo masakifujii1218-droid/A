@@ -722,11 +722,30 @@ ROUTE_TRAIN_TYPES = {
     }
 }
 
+def determine_route_name(start_station, end_station):
+    airport_only_stations = {"新高徳", "整備場", "空港"}
+
+    if start_station in airport_only_stations or end_station in airport_only_stations:
+        return "空港線"
+
+    if (
+        start_station in ROUTE_STATIONS["尾羽急本線"]
+        and end_station in ROUTE_STATIONS["尾羽急本線"]
+        and "尾羽急本線" in ROUTE_TRAIN_TYPES
+    ):
+        return "尾羽急本線"
+
+    if (
+        start_station in ROUTE_STATIONS["空港線"]
+        and end_station in ROUTE_STATIONS["空港線"]
+        and "空港線" in ROUTE_TRAIN_TYPES
+    ):
+        return "空港線"
+
+    return None
+
+
 @app_commands.choices(
-    路線名=[
-        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
-        app_commands.Choice(name="空港線", value="空港線")
-    ],
     種別=[
         app_commands.Choice(name="普通", value="普通"),
         app_commands.Choice(name="準急", value="準急"),
@@ -740,16 +759,14 @@ ROUTE_TRAIN_TYPES = {
 @bot.tree.command(name="create", description="ダイヤ作成")
 async def create(
     interaction: discord.Interaction,
-    路線名: app_commands.Choice[str],
     種別: app_commands.Choice[str],
-    開始時間: str,
     開始駅: str,
-    終了駅: str
+    行先: str,
+    開始時間: str
 ):
     if not await check_role(interaction):
         return
 
-    route_name = 路線名.value
     train_type = 種別.value
 
     def round_up_to_30_seconds(dt: datetime) -> datetime:
@@ -758,6 +775,15 @@ async def create(
         if dt.second < 30:
             return dt.replace(second=30, microsecond=0)
         return (dt + timedelta(seconds=60 - dt.second)).replace(second=0, microsecond=0)
+
+    route_name = determine_route_name(開始駅, 行先)
+
+    if route_name is None:
+        await interaction.response.send_message(
+            "開始駅と行先から路線を判定できませんでした。",
+            ephemeral=True
+        )
+        return
 
     if route_name not in ROUTE_STATIONS:
         await interaction.response.send_message(
@@ -786,9 +812,9 @@ async def create(
         )
         return
 
-    if 終了駅 not in route_stations:
+    if 行先 not in route_stations:
         await interaction.response.send_message(
-            "終了駅は路線上の駅ではありません。",
+            "行先は路線上の駅ではありません。",
             ephemeral=True
         )
         return
@@ -800,15 +826,15 @@ async def create(
         )
         return
 
-    if 終了駅 not in stops:
+    if 行先 not in stops:
         await interaction.response.send_message(
-            "終了駅は停車駅ではありません。",
+            "行先は停車駅ではありません。",
             ephemeral=True
         )
         return
 
     start_idx = route_stations.index(開始駅)
-    end_idx = route_stations.index(終了駅)
+    end_idx = route_stations.index(行先)
 
     if start_idx <= end_idx:
         full_path = route_stations[start_idx:end_idx + 1]
@@ -817,7 +843,7 @@ async def create(
 
     path = [station for station in full_path if station in stops]
 
-    if not path or path[0] != 開始駅 or path[-1] != 終了駅:
+    if not path or path[0] != 開始駅 or path[-1] != 行先:
         await interaction.response.send_message(
             "その種別はこの区間を走行しません",
             ephemeral=True
