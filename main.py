@@ -822,23 +822,7 @@ class TrainFormation:
 # 終日運用生成
 # ==========================================
 
-formations = []
 
-base_interval = 10  # 編成ごとの初回発車間隔（分）
-
-for i in range(編成数):
-
-    formations.append(
-        TrainFormation(
-            number=i + 1,
-            route_name=route_name,
-            start_station=開始駅,
-            end_station=終了駅,
-            departure=service_start + timedelta(
-                minutes=i * base_interval
-            )
-        )
-    )
 
 lines = []
 
