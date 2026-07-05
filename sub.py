@@ -716,6 +716,89 @@ def detect_route_name(start_station, end_station, via_station=None):
     return choose_best_route(candidates)
 
 
+def generate_formatted_timetable(route_name, train_type, start_station, end_station, start_time):
+    """
+    /createと同じ時刻生成ロジックを使用した共通関数
+    戻り値: タプル (lines_list, error_message)
+      lines_list: ['駅名 時刻発', '駅名 到着時刻着 発車時刻発', ...] の形式
+      error_message: エラー時のみ出力、成功時は None
+    """
+    def round_up_to_30_seconds(dt: datetime) -> datetime:
+        if dt.second == 0 or dt.second == 30:
+            return dt.replace(microsecond=0)
+        if dt.second < 30:
+            return dt.replace(second=30, microsecond=0)
+        return (dt + timedelta(seconds=60 - dt.second)).replace(second=0, microsecond=0)
+
+    if route_name not in ROUTE_STATIONS:
+        return None, f"{route_name} は未実装の路線です"
+
+    if train_type not in ROUTE_TRAIN_TYPES[route_name]:
+        return None, f"{route_name} では {train_type} は使用できません"
+
+    data = ROUTE_TRAIN_TYPES[route_name][train_type]
+    route_stations = ROUTE_STATIONS[route_name]
+    stops = [station for station in route_stations if any(
+        station == a or station == b for a, b in data.keys()
+    )]
+
+    if start_station not in route_stations:
+        return None, "開始駅は路線上の駅ではありません"
+
+    if end_station not in route_stations:
+        return None, "終了駅は路線上の駅ではありません"
+
+    if start_station not in stops:
+        return None, "開始駅は停車駅ではありません"
+
+    if end_station not in stops:
+        return None, "終了駅は停車駅ではありません"
+
+    start_idx = route_stations.index(start_station)
+    end_idx = route_stations.index(end_station)
+
+    if start_idx <= end_idx:
+        full_path = route_stations[start_idx:end_idx + 1]
+    else:
+        full_path = list(reversed(route_stations[end_idx:start_idx + 1]))
+
+    path = [station for station in full_path if station in stops]
+
+    if not path or path[0] != start_station or path[-1] != end_station:
+        return None, "その種別はこの区間を走行しません"
+
+    try:
+        current = datetime.strptime(start_time, "%H:%M").replace(second=0, microsecond=0)
+    except ValueError:
+        return None, "開始時間の形式は HH:MM です"
+
+    lines = []
+    lines.append(f"{path[0]} {current.strftime('%H:%M:%S')}発")
+
+    for index in range(1, len(path)):
+        prev_station = path[index - 1]
+        station = path[index]
+        travel_time = data.get((prev_station, station)) or data.get((station, prev_station))
+
+        if travel_time is None:
+            return None, "その種別はこの区間を走行しません"
+
+        current += timedelta(seconds=travel_time)
+        arrival = round_up_to_30_seconds(current)
+
+        if station == path[-1]:
+            lines.append(f"{station} {arrival.strftime('%H:%M:%S')}着")
+            current = arrival
+        else:
+            departure = arrival + timedelta(seconds=30)
+            lines.append(
+                f"{station} {arrival.strftime('%H:%M:%S')}着 {departure.strftime('%H:%M:%S')}発"
+            )
+            current = departure
+
+    return lines, None
+
+
 def generate_auto_timetable(route_name, start_station, end_station, start_time, end_time, count):
     if count < 1:
         return None, "本数は1以上で指定してください"
@@ -756,7 +839,7 @@ def generate_auto_timetable(route_name, start_station, end_station, start_time, 
         departure_dt = datetime(2000, 1, 1) + timedelta(minutes=departure_minutes)
         departure_text = departure_dt.strftime("%H:%M")
 
-        timetable, timetable_error = calculate_times(
+        timetable, timetable_error = generate_formatted_timetable(
             route_name,
             train_type,
             start_station,
@@ -853,13 +936,6 @@ async def create(
     route_name = detect_route_name(開始駅, 終了駅, 経由地)
     train_type = 種別.value
 
-    def round_up_to_30_seconds(dt: datetime) -> datetime:
-        if dt.second == 0 or dt.second == 30:
-            return dt.replace(microsecond=0)
-        if dt.second < 30:
-            return dt.replace(second=30, microsecond=0)
-        return (dt + timedelta(seconds=60 - dt.second)).replace(second=0, microsecond=0)
-
     if not 開始時間:
         await interaction.response.send_message(
             "開始時間の形式は HH:MM です。",
@@ -867,109 +943,15 @@ async def create(
         )
         return
 
-    if route_name not in ROUTE_STATIONS:
-        await interaction.response.send_message(
-            f"{route_name} は未実装の路線です",
-            ephemeral=True
-        )
+    lines, error = generate_formatted_timetable(route_name, train_type, 開始駅, 終了駅, 開始時間)
+    
+    if error:
+        await interaction.response.send_message(error, ephemeral=True)
         return
 
-    if train_type not in ROUTE_TRAIN_TYPES[route_name]:
-        await interaction.response.send_message(
-            f"{route_name} では {train_type} は使用できません",
-            ephemeral=True
-        )
-        return
-
-    data = ROUTE_TRAIN_TYPES[route_name][train_type]
-    route_stations = ROUTE_STATIONS[route_name]
-    stops = [station for station in route_stations if any(
-        station == a or station == b for a, b in data.keys()
-    )]
-
-    if 開始駅 not in route_stations:
-        await interaction.response.send_message(
-            "開始駅は路線上の駅ではありません。",
-            ephemeral=True
-        )
-        return
-
-    if 終了駅 not in route_stations:
-        await interaction.response.send_message(
-            "終了駅は路線上の駅ではありません。",
-            ephemeral=True
-        )
-        return
-
-    if 開始駅 not in stops:
-        await interaction.response.send_message(
-            "開始駅は停車駅ではありません。",
-            ephemeral=True
-        )
-        return
-
-    if 終了駅 not in stops:
-        await interaction.response.send_message(
-            "終了駅は停車駅ではありません。",
-            ephemeral=True
-        )
-        return
-
-    start_idx = route_stations.index(開始駅)
-    end_idx = route_stations.index(終了駅)
-
-    if start_idx <= end_idx:
-        full_path = route_stations[start_idx:end_idx + 1]
-    else:
-        full_path = list(reversed(route_stations[end_idx:start_idx + 1]))
-
-    path = [station for station in full_path if station in stops]
-
-    if not path or path[0] != 開始駅 or path[-1] != 終了駅:
-        await interaction.response.send_message(
-            "その種別はこの区間を走行しません",
-            ephemeral=True
-        )
-        return
-
-    try:
-        current = datetime.strptime(開始時間, "%H:%M").replace(second=0, microsecond=0)
-    except ValueError:
-        await interaction.response.send_message(
-            "開始時間の形式は HH:MM です。",
-            ephemeral=True
-        )
-        return
-
-    lines = [f"【{train_type}】"]
-    lines.append(f"{path[0]} {current.strftime('%H:%M:%S')}発")
-
-    for index in range(1, len(path)):
-        prev_station = path[index - 1]
-        station = path[index]
-        travel_time = data.get((prev_station, station)) or data.get((station, prev_station))
-
-        if travel_time is None:
-            await interaction.response.send_message(
-                "その種別はこの区間を走行しません",
-                ephemeral=True
-            )
-            return
-
-        current += timedelta(seconds=travel_time)
-        arrival = round_up_to_30_seconds(current)
-
-        if station == path[-1]:
-            lines.append(f"{station} {arrival.strftime('%H:%M:%S')}着")
-            current = arrival
-        else:
-            departure = arrival + timedelta(seconds=30)
-            lines.append(
-                f"{station} {arrival.strftime('%H:%M:%S')}着 {departure.strftime('%H:%M:%S')}発"
-            )
-            current = departure
-
-    await interaction.response.send_message("\n".join(lines))
+    output = [f"【{train_type}】"]
+    output.extend(lines)
+    await interaction.response.send_message("\n".join(output))
 
 
 # -------------------------
@@ -1184,16 +1166,12 @@ async def create_emp(
             end_station = train_data["end"]
             route_name = detect_route_name(start_station, end_station, via_station)
             
-            if route_name not in ROUTE_TRAIN_TYPES or train_type not in ROUTE_TRAIN_TYPES[route_name]:
-                messages.append(f"❌ 編成{idx}: {train_type} は {route_name} では使用できません")
-                continue
-            
-            timetable, error = calculate_times(route_name, train_type, start_station, end_station, departure)
+            timetable, error = generate_formatted_timetable(route_name, train_type, start_station, end_station, departure)
             
             if error:
                 messages.append(f"❌ 編成{idx}: {error}")
             else:
-                messages.append(f"✅ 編成{idx}:")
+                messages.append(f"✅ 編成{idx}: {train_type}")
                 messages.extend(timetable)
                 messages.append("")
         
@@ -1245,21 +1223,14 @@ async def create_man(
             start_station = train_data["start"]
             via_station = train_data.get("via")
             end_station = train_data["end"]
-            avoid_station = train_data.get("avoid")
             route_name = detect_route_name(start_station, end_station, via_station)
             
-            if route_name not in ROUTE_TRAIN_TYPES or train_type not in ROUTE_TRAIN_TYPES[route_name]:
-                messages.append(f"❌ 編成{idx}: {train_type} は {route_name} では使用できません")
-                continue
-            
-            timetable, error = calculate_times(route_name, train_type, start_station, end_station, departure)
+            timetable, error = generate_formatted_timetable(route_name, train_type, start_station, end_station, departure)
             
             if error:
                 messages.append(f"❌ 編成{idx}: {error}")
             else:
-                messages.append(f"✅ 編成{idx}:")
-                if avoid_station:
-                    messages.append(f"（待避駅: {avoid_station}）")
+                messages.append(f"✅ 編成{idx}: {train_type}")
                 messages.extend(timetable)
                 messages.append("")
         
