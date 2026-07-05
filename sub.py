@@ -175,6 +175,120 @@ async def check_role(interaction: discord.Interaction) -> bool:
     return True
 
 # -------------------------
+# クールダウン / 権限
+# -------------------------
+
+USAGE_FILE = "usage.json"
+
+COMMAND_RULES = {
+    "create": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510021467155202057],
+        "window_sec": 12 * 3600,
+        "limit": 4
+    },
+    "create_emp": {
+        "unlimited_roles": [1510405214811852900],
+        "limited_roles": [1510021467167789097, 1511882841997185064],
+        "window_sec": 24 * 3600,
+        "limit": 5
+    },
+    "create_man": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510405214811852900],
+        "window_sec": 24 * 3600,
+        "limit": 4
+    },
+    "create_auto": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510405214811852900],
+        "window_sec": 24 * 3600,
+        "limit": 4
+    }
+}
+
+
+def load_usage_data():
+    if not os.path.exists(USAGE_FILE):
+        return {}
+
+    try:
+        with open(USAGE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_usage_data(data):
+    try:
+        with open(USAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except OSError:
+        pass
+
+
+def format_remaining_time(seconds):
+    if seconds <= 0:
+        return "0時間0分"
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600 + 59) // 60
+
+    if minutes >= 60:
+        hours += 1
+        minutes -= 60
+
+    return f"{hours}時間{minutes}分"
+
+
+async def check_command_permission(interaction: discord.Interaction, command_name: str) -> bool:
+    rules = COMMAND_RULES.get(command_name)
+    if rules is None:
+        await interaction.response.send_message(
+            "このコマンドを使用する権限がありません。",
+            ephemeral=True
+        )
+        return False
+
+    user_roles = [getattr(role, "id", None) for role in getattr(interaction.user, "roles", [])]
+
+    if any(role_id in rules["unlimited_roles"] for role_id in user_roles):
+        return True
+
+    if not any(role_id in rules["limited_roles"] for role_id in user_roles):
+        await interaction.response.send_message(
+            "このコマンドを使用する権限がありません。",
+            ephemeral=True
+        )
+        return False
+
+    user_id = str(interaction.user.id)
+    now = int(time.time())
+
+    usage_data = load_usage_data()
+    user_usage = usage_data.setdefault(user_id, {})
+    timestamps = user_usage.setdefault(command_name, [])
+    window_start = now - rules["window_sec"]
+    timestamps = [ts for ts in timestamps if ts > window_start]
+
+    if len(timestamps) >= rules["limit"]:
+        earliest = min(timestamps)
+        remaining = earliest + rules["window_sec"] - now
+        await interaction.response.send_message(
+            f"クールダウン中です。\n\nあと {format_remaining_time(remaining)}後に利用できます。",
+            ephemeral=True
+        )
+        user_usage[command_name] = timestamps
+        save_usage_data(usage_data)
+        return False
+
+    timestamps.append(now)
+    user_usage[command_name] = timestamps
+    usage_data[user_id] = user_usage
+    save_usage_data(usage_data)
+    return True
+
+# -------------------------
 # 駅順
 # -------------------------
 
@@ -574,7 +688,7 @@ async def create_auto(
     終了時刻: str,
     本数: int
 ):
-    if not await check_role(interaction):
+    if not await check_command_permission(interaction, "create_auto"):
         return
 
     route_name = DEFAULT_ROUTE_NAME
@@ -621,7 +735,7 @@ async def create(
     開始駅: str,
     終了駅: str
 ):
-    if not await check_role(interaction):
+    if not await check_command_permission(interaction, "create"):
         return
 
     route_name = DEFAULT_ROUTE_NAME
@@ -922,7 +1036,7 @@ async def create_emp(
     interaction: discord.Interaction,
     編成数: int
 ):
-    if not await check_role(interaction):
+    if not await check_command_permission(interaction, "create_emp"):
         return
 
     route_name = DEFAULT_ROUTE_NAME
@@ -983,7 +1097,7 @@ async def create_man(
     interaction: discord.Interaction,
     編成数: int
 ):
-    if not await check_role(interaction):
+    if not await check_command_permission(interaction, "create_man"):
         return
 
     route_name = DEFAULT_ROUTE_NAME
