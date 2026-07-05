@@ -330,6 +330,19 @@ ROUTE_STATIONS = {
         "新高徳",
         "整備場",
         "空港"
+    ],
+    "井問線": [
+        "安越",
+        "雲中",
+        "梅郷",
+        "井口",
+        "上井口",
+        "参田町",
+        "東本郷",
+        "本郷",
+        "西問屋町",
+        "問屋町",
+        "千鳥"
     ]
 }
 
@@ -421,6 +434,38 @@ RAPID_EXPRESS = {
 }
 
 # -------------------------
+# 井問線
+# -------------------------
+
+IDEMON_LOCAL = {
+    ("安越","雲中"):60,
+    ("雲中","梅郷"):60,
+    ("梅郷","井口"):60,
+    ("井口","上井口"):90,
+    ("上井口","参田町"):90,
+    ("参田町","東本郷"):60,
+    ("東本郷","本郷"):60,
+    ("本郷","西問屋町"):80,
+    ("西問屋町","問屋町"):110,
+    ("問屋町","千鳥"):110
+}
+
+IDEMON_RAPID = {
+    ("安越","雲中"):60,
+    ("雲中","井口"):90,
+    ("井口","参田町"):150,
+    ("参田町","本郷"):90,
+    ("本郷","問屋町"):180,
+    ("問屋町","千鳥"):110
+}
+
+IDEMON_EXPRESS = {
+    ("安越","井口"):120,
+    ("井口","本郷"):240,
+    ("本郷","千鳥"):240
+}
+
+# -------------------------
 # 区間急行
 # -------------------------
 
@@ -484,6 +529,11 @@ ROUTE_TRAIN_TYPES = {
             ("新高徳","整備場"):90,
             ("整備場","空港"):90
         }
+    },
+    "井問線": {
+        "普通": IDEMON_LOCAL,
+        "快速": IDEMON_RAPID,
+        "急行": IDEMON_EXPRESS
     }
 }
 
@@ -607,6 +657,61 @@ def get_available_train_types(route_name):
     return list(ROUTE_TRAIN_TYPES[route_name].keys())
 
 
+def choose_best_route(candidates):
+    if not candidates:
+        return None
+
+    ranked = []
+    for route_name in candidates:
+        stations = ROUTE_STATIONS[route_name]
+        ranked.append((len(stations), route_name == DEFAULT_ROUTE_NAME, route_name))
+
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+    return ranked[0][2]
+
+
+def detect_route_name(start_station, end_station, via_station=None):
+    if via_station:
+        via_station = via_station.strip() or None
+
+    if via_station:
+        routes_with_all = [
+            route_name
+            for route_name, stations in ROUTE_STATIONS.items()
+            if start_station in stations
+            and via_station in stations
+            and end_station in stations
+        ]
+        if routes_with_all:
+            return choose_best_route(routes_with_all)
+
+        routes_start_via = [
+            route_name
+            for route_name, stations in ROUTE_STATIONS.items()
+            if start_station in stations and via_station in stations
+        ]
+        if routes_start_via:
+            return choose_best_route(routes_start_via)
+
+        routes_via_end = [
+            route_name
+            for route_name, stations in ROUTE_STATIONS.items()
+            if via_station in stations and end_station in stations
+        ]
+        if routes_via_end:
+            return choose_best_route(routes_via_end)
+
+    candidates = []
+    for route_name, stations in ROUTE_STATIONS.items():
+        if start_station in stations and end_station in stations:
+            candidates.append(route_name)
+
+    if not candidates:
+        return DEFAULT_ROUTE_NAME
+
+    return choose_best_route(candidates)
+
+
 def generate_auto_timetable(route_name, start_station, end_station, start_time, end_time, count):
     if count < 1:
         return None, "本数は1以上で指定してください"
@@ -684,6 +789,8 @@ async def create_auto(
     interaction: discord.Interaction,
     開始駅: str,
     終了駅: str,
+    経由地: str = None,
+    *,
     開始時刻: str,
     終了時刻: str,
     本数: int
@@ -691,7 +798,7 @@ async def create_auto(
     if not await check_command_permission(interaction, "create_auto"):
         return
 
-    route_name = DEFAULT_ROUTE_NAME
+    route_name = detect_route_name(開始駅, 終了駅, 経由地)
     results, error = generate_auto_timetable(
         route_name,
         開始駅,
@@ -731,14 +838,15 @@ async def create_auto(
 async def create(
     interaction: discord.Interaction,
     種別: app_commands.Choice[str],
-    開始時間: str,
     開始駅: str,
-    終了駅: str
+    終了駅: str,
+    経由地: str = None,
+    開始時間: str = None
 ):
     if not await check_command_permission(interaction, "create"):
         return
 
-    route_name = DEFAULT_ROUTE_NAME
+    route_name = detect_route_name(開始駅, 終了駅, 経由地)
     train_type = 種別.value
 
     def round_up_to_30_seconds(dt: datetime) -> datetime:
@@ -747,6 +855,13 @@ async def create(
         if dt.second < 30:
             return dt.replace(second=30, microsecond=0)
         return (dt + timedelta(seconds=60 - dt.second)).replace(second=0, microsecond=0)
+
+    if not 開始時間:
+        await interaction.response.send_message(
+            "開始時間の形式は HH:MM です。",
+            ephemeral=True
+        )
+        return
 
     if route_name not in ROUTE_STATIONS:
         await interaction.response.send_message(
@@ -924,6 +1039,10 @@ class TrainInfoModal(discord.ui.Modal):
         label="開始駅",
         required=True
     )
+    via_station = discord.ui.TextInput(
+        label="経由地（任意）",
+        required=False
+    )
     end_station = discord.ui.TextInput(
         label="終了駅",
         required=True
@@ -934,6 +1053,7 @@ class TrainInfoModal(discord.ui.Modal):
             "type": str(self.train_type),
             "departure": str(self.departure_time),
             "start": str(self.start_station),
+            "via": str(self.via_station) if str(self.via_station).strip() else None,
             "end": str(self.end_station)
         }
         self.all_trains_data.append(train_data)
@@ -982,6 +1102,10 @@ class ManualTrainInfoModal(discord.ui.Modal):
         label="開始駅",
         required=True
     )
+    via_station = discord.ui.TextInput(
+        label="経由地（任意）",
+        required=False
+    )
     end_station = discord.ui.TextInput(
         label="終了駅",
         required=True
@@ -996,6 +1120,7 @@ class ManualTrainInfoModal(discord.ui.Modal):
             "type": str(self.train_type),
             "departure": str(self.departure_time),
             "start": str(self.start_station),
+            "via": str(self.via_station) if str(self.via_station).strip() else None,
             "end": str(self.end_station),
             "avoid": str(self.avoid_station) if str(self.avoid_station).strip() else None
         }
@@ -1056,9 +1181,11 @@ async def create_emp(
             train_type = train_data["type"]
             departure = train_data["departure"]
             start_station = train_data["start"]
+            via_station = train_data.get("via")
             end_station = train_data["end"]
+            route_name = detect_route_name(start_station, end_station, via_station)
             
-            if train_type not in ROUTE_TRAIN_TYPES[route_name]:
+            if route_name not in ROUTE_TRAIN_TYPES or train_type not in ROUTE_TRAIN_TYPES[route_name]:
                 messages.append(f"❌ 編成{idx}: {train_type} は {route_name} では使用できません")
                 continue
             
@@ -1117,10 +1244,12 @@ async def create_man(
             train_type = train_data["type"]
             departure = train_data["departure"]
             start_station = train_data["start"]
+            via_station = train_data.get("via")
             end_station = train_data["end"]
             avoid_station = train_data.get("avoid")
+            route_name = detect_route_name(start_station, end_station, via_station)
             
-            if train_type not in ROUTE_TRAIN_TYPES[route_name]:
+            if route_name not in ROUTE_TRAIN_TYPES or train_type not in ROUTE_TRAIN_TYPES[route_name]:
                 messages.append(f"❌ 編成{idx}: {train_type} は {route_name} では使用できません")
                 continue
             
