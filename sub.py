@@ -162,6 +162,7 @@ def save_trains(data):
 # -------------------------
 
 COMMAND_ROLE_ID = 1510405214811852900
+ADMIN_ROLE_ID = 1510021467167789104
 DEFAULT_ROUTE_NAME = "尾羽急本線"
 
 async def check_role(interaction: discord.Interaction) -> bool:
@@ -251,6 +252,9 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
         return False
 
     user_roles = [getattr(role, "id", None) for role in getattr(interaction.user, "roles", [])]
+
+    if ADMIN_ROLE_ID in user_roles:
+        return True
 
     if any(role_id in rules["unlimited_roles"] for role_id in user_roles):
         return True
@@ -1110,10 +1114,6 @@ class ManualTrainInfoModal(discord.ui.Modal):
         label="終了駅",
         required=True
     )
-    avoid_station = discord.ui.TextInput(
-        label="待避駅（任意）",
-        required=False
-    )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         train_data = {
@@ -1121,8 +1121,7 @@ class ManualTrainInfoModal(discord.ui.Modal):
             "departure": str(self.departure_time),
             "start": str(self.start_station),
             "via": str(self.via_station) if str(self.via_station).strip() else None,
-            "end": str(self.end_station),
-            "avoid": str(self.avoid_station) if str(self.avoid_station).strip() else None
+            "end": str(self.end_station)
         }
         self.all_trains_data.append(train_data)
 
