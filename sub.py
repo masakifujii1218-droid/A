@@ -162,6 +162,7 @@ def save_trains(data):
 # -------------------------
 
 COMMAND_ROLE_ID = 1510405214811852900
+DEFAULT_ROUTE_NAME = "尾羽急本線"
 
 async def check_role(interaction: discord.Interaction) -> bool:
     """ロールをチェックして、権限がない場合はメッセージを送信"""
@@ -564,16 +565,9 @@ def generate_auto_timetable(route_name, start_station, end_station, start_time, 
     generated.sort(key=lambda item: item["departure_minutes"])
     return generated, None
 
-@app_commands.choices(
-    路線名=[
-        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
-        app_commands.Choice(name="空港線", value="空港線")
-    ]
-)
 @bot.tree.command(name="create-auto", description="自動ダイヤ作成")
 async def create_auto(
     interaction: discord.Interaction,
-    路線名: app_commands.Choice[str],
     開始駅: str,
     終了駅: str,
     開始時刻: str,
@@ -583,7 +577,7 @@ async def create_auto(
     if not await check_role(interaction):
         return
 
-    route_name = 路線名.value
+    route_name = DEFAULT_ROUTE_NAME
     results, error = generate_auto_timetable(
         route_name,
         開始駅,
@@ -609,10 +603,6 @@ async def create_auto(
 
 
 @app_commands.choices(
-    路線名=[
-        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
-        app_commands.Choice(name="空港線", value="空港線")
-    ],
     種別=[
         app_commands.Choice(name="普通", value="普通"),
         app_commands.Choice(name="準急", value="準急"),
@@ -626,7 +616,6 @@ async def create_auto(
 @bot.tree.command(name="create", description="ダイヤ作成")
 async def create(
     interaction: discord.Interaction,
-    路線名: app_commands.Choice[str],
     種別: app_commands.Choice[str],
     開始時間: str,
     開始駅: str,
@@ -635,7 +624,7 @@ async def create(
     if not await check_role(interaction):
         return
 
-    route_name = 路線名.value
+    route_name = DEFAULT_ROUTE_NAME
     train_type = 種別.value
 
     def round_up_to_30_seconds(dt: datetime) -> datetime:
@@ -920,10 +909,6 @@ class ManualTrainInfoModal(discord.ui.Modal):
 
 
 @app_commands.choices(
-    路線名=[
-        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
-        app_commands.Choice(name="空港線", value="空港線")
-    ],
     編成数=[
         app_commands.Choice(name="1編成", value=1),
         app_commands.Choice(name="2編成", value=2),
@@ -935,13 +920,12 @@ class ManualTrainInfoModal(discord.ui.Modal):
 @bot.tree.command(name="create-emp", description="最大5編成列車作成（フォーム入力）")
 async def create_emp(
     interaction: discord.Interaction,
-    路線名: app_commands.Choice[str],
     編成数: int
 ):
     if not await check_role(interaction):
         return
 
-    route_name = 路線名.value
+    route_name = DEFAULT_ROUTE_NAME
 
     if route_name not in ROUTE_STATIONS:
         await interaction.response.send_message(
@@ -981,10 +965,6 @@ async def create_emp(
 
 
 @app_commands.choices(
-    路線名=[
-        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
-        app_commands.Choice(name="空港線", value="空港線")
-    ],
     編成数=[
         app_commands.Choice(name="1編成", value=1),
         app_commands.Choice(name="2編成", value=2),
@@ -1001,13 +981,12 @@ async def create_emp(
 @bot.tree.command(name="create-man", description="最大10編成列車作成（詳細設定対応）")
 async def create_man(
     interaction: discord.Interaction,
-    路線名: app_commands.Choice[str],
     編成数: int
 ):
     if not await check_role(interaction):
         return
 
-    route_name = 路線名.value
+    route_name = DEFAULT_ROUTE_NAME
 
     if route_name not in ROUTE_STATIONS:
         await interaction.response.send_message(
