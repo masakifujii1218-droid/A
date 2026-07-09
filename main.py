@@ -137,7 +137,7 @@ else:
     intents.message_content = True  # 👈 【重要】メッセージ内容の読み取りを許可して警告を消す
 
     # プレフィックスコマンド「?」とスラッシュコマンドの両方を main 側で定義
-    bot = commands.Bot(command_prefix=["/", "?"], intents=intents)
+    bot = commands.Bot(command_prefix="?", intents=intents)
     # --------------------------------------------------
 
 # ==========================================
