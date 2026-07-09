@@ -11,7 +11,7 @@ import io
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
 LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
-ADMIN_ROLE_ID = 1510021467167789104       # 運営・管理者ロールID（自動権限付与用）
+ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID（自動権限付与用）
 
 VERSION = "v3.6.0 (Auto-Permission & Closereq)"
 
