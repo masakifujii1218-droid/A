@@ -4,6 +4,7 @@ import os
 import random
 import threading
 import time
+import sub  # 👈 【超重要】上から7行目あたりに、この1行が絶対に必要です！
 
 # ==========================================
 # Flask (ダミー定義含む)
