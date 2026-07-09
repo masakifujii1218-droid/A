@@ -259,22 +259,71 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
 ROUTE_STATIONS = {
     "尾羽急本線": ["尾羽原", "井口", "梅郷", "雲中", "安越", "十川", "千峰", "南雲谷", "雲谷", "長峰", "西高徳", "高徳", "明神前", "舞子台", "紀田", "穂", "瀬舞", "余美", "千鳥"],
     "空港線": ["尾羽原", "井口", "梅郷", "雲中", "安越", "十川", "千峰", "南雲谷", "雲谷", "長峰", "西高徳", "高徳", "新高徳", "整備場", "空港"],
-    "井問線": ["安越", "雲中", "梅郷", "井口", "上井口", "参田町", "東本郷", "本郷", "西問屋町", "問屋町", "千鳥"]
+    "井問線": ["安越", "雲中", "梅郷", "井口", "上井口", "参田町", "東本郷", "本郷", "西問屋町", "問屋町", "千鳥"],
+    "舞山線": ["舞山", "新舞山", "安小", "鳴田", "芽蒲", "池ノ上", "赤川", "那津", "西堀理", "堀理", "山谷", "大日古部", "中台", "輪厚"]
 }
 
-STOP_TIME = 30
+STOP_TIME = 30  # 停車時間は元の30秒を維持
 TURNBACK_MINUTES = 5
 MIN_HEADWAY = 2
 
-LOCAL = {("尾羽原", "井口"): 60, ("井口", "梅郷"): 60, ("梅郷", "雲中"): 30, ("雲中", "安越"): 60, ("安越", "十川"): 60, ("十川", "千峰"): 90, ("千峰", "南雲谷"): 80, ("南雲谷", "雲谷"): 120, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "明神前"): 120, ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
-EXPRESS = {("尾羽原", "井口"): 85, ("井口", "安越"): 85, ("安越", "雲谷"): 180, ("雲谷", "高徳"): 140, ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120}
-SEMI_EXPRESS = {("尾羽原", "井口"): 90, ("井口", "雲中"): 120, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "雲谷"): 150, ("雲谷", "長峰"): 120, ("長峰", "高徳"): 150, ("高徳", "舞子台"): 180, ("舞子台", "紀田"): 120, ("紀田", "千鳥"): 180}
-RAPID = {("尾羽原", "井口"): 60, ("井口", "雲中"): 90, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "雲谷"): 180, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "明神前"): 120, ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
-RAPID_EXPRESS = {("尾羽原", "高徳"): 410, ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120}
-IDEMON_LOCAL = {("安越", "雲中"): 60, ("雲中", "梅郷"): 60, ("梅郷", "井口"): 60, ("井口", "上井口"): 90, ("上井口", "参田町"): 90, ("参田町", "東本郷"): 60, ("東本郷", "本郷"): 60, ("本郷", "西問屋町"): 80, ("西問屋町", "問屋町"): 110, ("問屋町", "千鳥"): 110}
-IDEMON_RAPID = {("安越", "雲中"): 60, ("雲中", "井口"): 90, ("井口", "参田町"): 150, ("参田町", "本郷"): 90, ("本郷", "問屋町"): 180, ("問屋町", "千鳥"): 110}
-IDEMON_EXPRESS = {("安越", "井口"): 120, ("井口", "本郷"): 240, ("本郷", "千鳥"): 240}
-SECTION_EXPRESS = {("尾羽原", "井口"): 90, ("井口", "安越"): 120, ("安越", "雲谷"): 210, ("雲谷", "高徳"): 180, ("高徳", "明神前"): 150, ("明神前", "舞子台"): 120, ("舞子台", "紀田"): 90, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
+LOCAL = {
+    ("尾羽原", "井口"): 60, ("井口", "梅郷"): 60, ("梅郷", "雲中"): 30, ("雲中", "安越"): 60,
+    ("安越", "十川"): 60, ("十川", "千峰"): 90, ("千峰", "南雲谷"): 80, ("南雲谷", "雲谷"): 120,
+    ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "明神前"): 120,
+    ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90,
+    ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90
+}
+EXPRESS = {
+    ("尾羽原", "井口"): 85, ("井口", "安越"): 85, ("安越", "雲谷"): 180, ("雲谷", "高徳"): 140,
+    ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120
+}
+SEMI_EXPRESS = {
+    ("尾羽原", "井口"): 90, ("井口", "雲中"): 120, ("雲中", "安越"): 60, ("安越", "千峰"): 120,
+    ("千峰", "雲谷"): 150, ("雲谷", "長峰"): 120, ("長峰", "高徳"): 150, ("高徳", "舞子台"): 180,
+    ("舞子台", "紀田"): 120, ("紀田", "千鳥"): 180
+}
+RAPID = {
+    ("尾羽原", "井口"): 60, ("井口", "雲中"): 90, ("雲中", "安越"): 60, ("安越", "千峰"): 120,
+    ("千峰", "雲谷"): 180, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90,
+    ("高徳", "明神前"): 120, ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90,
+    ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90
+}
+RAPID_EXPRESS = {
+    ("尾羽原", "高徳"): 410, ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120
+}
+IDEMON_LOCAL = {
+    ("安越", "雲中"): 60, ("雲中", "梅郷"): 60, ("梅郷", "井口"): 60, ("井口", "上井口"): 90,
+    ("上井口", "参田町"): 90, ("参田町", "東本郷"): 60, ("東本郷", "本郷"): 60, ("本郷", "西問屋町"): 80,
+    ("西問屋町", "問屋町"): 110, ("問屋町", "千鳥"): 110
+}
+IDEMON_RAPID = {
+    ("安越", "雲中"): 60, ("雲中", "井口"): 90, ("井口", "参田町"): 150, ("参田町", "本郷"): 90,
+    ("本郷", "問屋町"): 180, ("問屋町", "千鳥"): 110
+}
+IDEMON_EXPRESS = {
+    ("安越", "井口"): 120, ("井口", "本郷"): 240, ("本郷", "千鳥"): 240
+}
+SECTION_EXPRESS = {
+    ("尾羽原", "井口"): 90, ("井口", "安越"): 120, ("安越", "雲谷"): 210, ("雲谷", "高徳"): 180,
+    ("高徳", "明神前"): 150, ("明神前", "舞子台"): 120, ("舞子台", "紀田"): 90, ("紀田", "穂"): 90,
+    ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90
+}
+
+# --- 舞山線データ（純粋追加分） ---
+MAIYAMA_LOCAL = {
+    ("舞山", "新舞山"): 65, ("新舞山", "安小"): 70, ("安小", "鳴田"): 65, ("鳴田", "芽蒲"): 95,
+    ("芽蒲", "池ノ上"): 75, ("池ノ上", "赤川"): 65, ("赤川", "那津"): 70, ("那津", "西堀理"): 60,
+    ("西堀理", "堀理"): 75, ("堀理", "山谷"): 100, ("山谷", "大日古部"): 90, ("大日古部", "中台"): 90,
+    ("中台", "輪厚"): 60
+}
+MAIYAMA_RAPID = {
+    ("舞山", "安小"): 180, ("安小", "鳴田"): 60, ("鳴田", "芽蒲"): 60, ("芽蒲", "池ノ上"): 60,
+    ("池ノ上", "赤川"): 60, ("赤川", "那津"): 90, ("那津", "西堀理"): 60, ("西堀理", "堀理"): 90
+}
+MAIYAMA_EXPRESS = {
+    ("堀理", "那津"): 90, ("那津", "安小"): 90, ("安小", "舞山"): 210
+}
 
 ROUTE_TRAIN_TYPES = {
     "尾羽急本線": {"普通": LOCAL, "準急": SEMI_EXPRESS, "区間急行": SECTION_EXPRESS, "快速": RAPID, "急行": EXPRESS, "快速急行": RAPID_EXPRESS},
@@ -283,7 +332,15 @@ ROUTE_TRAIN_TYPES = {
         "快速": {("尾羽原", "井口"): 60, ("井口", "雲中"): 90, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "南雲谷"): 180, ("南雲谷", "雲谷"): 180, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "新高徳"): 120, ("新高徳", "整備場"): 120, ("整備場", "空港"): 120},
         "空港急行": {("尾羽原", "高徳"): 410, ("高徳", "新高徳"): 90, ("新高徳", "整備場"): 90, ("整備場", "空港"): 90}
     },
-    "井問線": {"普通": IDEMON_LOCAL, "快速": IDEMON_RAPID, "急行": IDEMON_EXPRESS}
+    "井問線": {"普通": IDEMON_LOCAL, "快速": IDEMON_RAPID, "急行": IDEMON_EXPRESS},
+    "舞山線": {"普通": MAIYAMA_LOCAL, "快速": MAIYAMA_RAPID, "特急": MAIYAMA_EXPRESS}
+}
+
+ROUTE_AVOID_STATIONS = {
+    "尾羽急本線": ["尾羽原", "安越", "雲谷", "高徳", "紀田", "千鳥"],
+    "空港線": ["尾羽原", "安越", "雲谷", "高徳", "空港"],
+    "井問線": ["安越", "井口", "本郷", "千鳥"],
+    "舞山線": ["舞山", "新舞山", "安小", "芽蒲", "那津", "堀理"]
 }
 
 # ==========================================
@@ -411,7 +468,7 @@ def generate_formatted_timetable(route_name, train_type, start_station, end_stat
             lines.append(f"{station} {arrival.strftime('%H:%M:%S')}着")
             current = arrival
         else:
-            departure = arrival + timedelta(seconds=30)
+            departure = arrival + timedelta(seconds=STOP_TIME)
             lines.append(f"{station} {arrival.strftime('%H:%M:%S')}着 {departure.strftime('%H:%M:%S')}発")
             current = departure
 
@@ -472,6 +529,7 @@ def generate_auto_timetable(route_name, start_station, end_station, start_time, 
     departures = []
     trains = []
     types = get_available_train_types(route_name)
+    avoid_candidates = ROUTE_AVOID_STATIONS.get(route_name, [])
 
     for _ in range(count):
         train_type = random.choice(types)
@@ -486,8 +544,9 @@ def generate_auto_timetable(route_name, start_station, end_station, start_time, 
         if error: continue
 
         avoid = None
-        candidates = [s for s in station_path[1:-1]]
-        if candidates: avoid = random.choice(candidates)
+        valid_candidates = [s for s in station_path[1:-1] if s in avoid_candidates]
+        if valid_candidates: 
+            avoid = random.choice(valid_candidates)
 
         trains.append({
             "route": route_name, "type": train_type, "departure": dep,
@@ -532,12 +591,6 @@ def adjust_departure(station: str, depart: datetime):
             return depart
         depart += timedelta(minutes=MIN_HEADWAY)
 
-def choose_avoid_station(route_name, start_station, end_station):
-    path, _ = build_station_path(route_name, start_station, end_station)
-    candidates = [station for station in path[1:-1] if station not in (start_station, end_station)]
-    if not candidates: return None
-    return random.choice(candidates)
-
 # ==========================================
 # Discord スラッシュコマンド & モーダル UI
 # ==========================================
@@ -576,7 +629,7 @@ class TrainInfoModal(discord.ui.Modal):
         self.all_trains_data = all_trains_data
         self.callback = callback
 
-    train_type = discord.ui.TextInput(label="種別", placeholder="普通/快速/急行/準急/区間急行/快速急行", required=True)
+    train_type = discord.ui.TextInput(label="種別", placeholder="普通/快速/急行/準急/区間急行/快速急行/特急", required=True)
     departure_time = discord.ui.TextInput(label="始発時刻", placeholder="HH:MM", required=True)
     start_station = discord.ui.TextInput(label="開始駅", required=True)
     via_station = discord.ui.TextInput(label="経由地（任意）", required=False)
@@ -609,7 +662,7 @@ class ManualTrainInfoModal(discord.ui.Modal):
         self.all_trains_data = all_trains_data
         self.callback = callback
 
-    train_type = discord.ui.TextInput(label="種別", placeholder="普通/快速/急行/準急/区間急行/快速急行", required=True)
+    train_type = discord.ui.TextInput(label="種別", placeholder="普通/快速/急行/準急/区間急行/快速急行/特急", required=True)
     departure_time = discord.ui.TextInput(label="始発時刻", placeholder="HH:MM", required=True)
     start_station = discord.ui.TextInput(label="開始駅", required=True)
     via_station = discord.ui.TextInput(label="経由地（任意）", required=False)
@@ -655,7 +708,7 @@ async def create_auto(interaction: discord.Interaction, 開始駅: str, 終了�
         app_commands.Choice(name="普通", value="普通"), app_commands.Choice(name="準急", value="準急"),
         app_commands.Choice(name="区間急行", value="区間急行"), app_commands.Choice(name="快速", value="快速"),
         app_commands.Choice(name="急行", value="急行"), app_commands.Choice(name="快速急行", value="快速急行"),
-        app_commands.Choice(name="空港急行", value="空港急行")
+        app_commands.Choice(name="空港急行", value="空港急行"), app_commands.Choice(name="特急", value="特急")
     ]
 )
 @bot.tree.command(name="create", description="ダイヤ作成")
