@@ -1,5 +1,5 @@
 # ==========================================
-# sub.py (Modmailシステム + クローズリクエスト & 評価機能)
+# sub.py (Modmailシステム + 権限自動付与 ＆ クローズリクエスト)
 # ==========================================
 import discord
 from discord.ext import commands
@@ -11,8 +11,9 @@ import io
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
 LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
+ADMIN_ROLE_ID = 1510021467167789104       # 運営・管理者ロールID（自動権限付与用）
 
-VERSION = "v3.5.0 (Closereq & Star Rating System)"
+VERSION = "v3.6.0 (Auto-Permission & Closereq)"
 
 # ==========================================
 # [DM用] 改善点・問題点の入力モーダル
@@ -33,8 +34,6 @@ class FeedbackModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
-        # 評価用チャンネルに送信するEmbedを作成
         stars_str = "⭐" * self.rating_stars if self.rating_stars > 0 else "🖤 (星0)"
         embed = discord.Embed(
             title="📊 問い合わせ評価・フィードバック受信",
@@ -45,61 +44,44 @@ class FeedbackModal(discord.ui.Modal):
         embed.add_field(name="⭐ 満足度評価", value=f"**{stars_str}** ({self.rating_stars}/5)", inline=False)
         embed.add_field(name="💬 改善点・問題点", value=self.feedback_text.value or "*記述なし*", inline=False)
 
-        # 指定のチャンネルに評価ログを転送
         rating_channel = interaction.client.get_channel(RATING_CHANNEL_ID)
         if rating_channel:
             await rating_channel.send(embed=embed)
-        
-        # ユーザーに感謝メッセージ
-        await interaction.followup.send("ご協力ありがとうございました！貴重なご意見として今後の運営に役立たせていただきます。", ephemeral=True)
+        await interaction.followup.send("ご協力ありがとうございました！", ephemeral=True)
 
 # ==========================================
-# [DM用] 星評価（0〜5）のセレクトメニュー or ボタン
+# [DM用] 星評価（0〜5）のボタン
 # ==========================================
 class StarRatingView(discord.ui.View):
     def __init__(self, user_id: int):
-        super().__init__(timeout=600)  # 10分間有効
+        super().__init__(timeout=600)
         self.user_id = user_id
 
     async def handle_rating(self, interaction: discord.Interaction, stars: int):
-        # ボタンを無効化してメッセージを更新
         for child in self.children:
             child.disabled = True
         await interaction.message.edit(view=self)
-        
-        # 改善点入力モーダルを立ち上げる
         await interaction.response.send_modal(FeedbackModal(rating_stars=stars, user_id=self.user_id))
 
     @discord.ui.button(label="⭐0", style=discord.ButtonStyle.secondary, custom_id="star_0")
-    async def star0(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 0)
-
+    async def star0(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 0)
     @discord.ui.button(label="⭐1", style=discord.ButtonStyle.danger, custom_id="star_1")
-    async def star1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 1)
-
+    async def star1(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 1)
     @discord.ui.button(label="⭐2", style=discord.ButtonStyle.danger, custom_id="star_2")
-    async def star2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 2)
-
+    async def star2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 2)
     @discord.ui.button(label="⭐3", style=discord.ButtonStyle.success, custom_id="star_3")
-    async def star3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 3)
-
+    async def star3(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 3)
     @discord.ui.button(label="⭐4", style=discord.ButtonStyle.success, custom_id="star_4")
-    async def star4(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 4)
-
+    async def star4(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 4)
     @discord.ui.button(label="⭐5", style=discord.ButtonStyle.primary, custom_id="star_5")
-    async def star5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_rating(interaction, 5)
+    async def star5(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 5)
 
 # ==========================================
 # [DM用] クローズ同意ボタン
 # ==========================================
 class CloseRequestConfirmView(discord.ui.View):
     def __init__(self, channel_id: int, user_id: int, channel_name: str, staff_mention: str):
-        super().__init__(timeout=None) # 永続化
+        super().__init__(timeout=None)
         self.channel_id = channel_id
         self.user_id = user_id
         self.channel_name = channel_name
@@ -110,13 +92,11 @@ class CloseRequestConfirmView(discord.ui.View):
         bot = interaction.client
         ticket_channel = bot.get_channel(self.channel_id)
         
-        # ユーザー側画面のボタンを無効化
         button.disabled = True
         button.label = "クローズされました"
         await interaction.message.edit(view=self)
         await interaction.response.defer()
 
-        # 1. チケットチャンネルから会話ログをバックアップエクスポート
         log_lines = []
         if ticket_channel:
             await ticket_channel.send("🔒 ユーザーがクローズを承諾しました。ログをエクスポート中...")
@@ -130,14 +110,12 @@ class CloseRequestConfirmView(discord.ui.View):
 
         full_log_text = "\n".join(log_lines)
 
-        # 2. ログチャンネル（1510042822533840936）へ送信
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             log_embed = discord.Embed(
                 title=f"🔒 チケットクローズログ: {self.channel_name}",
                 description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`?closereq`)",
-                color=discord.Color.red(),
-                timestamp=datetime.now()
+                color=discord.Color.red(), timestamp=datetime.now()
             )
             if len(full_log_text) > 3000 or len(full_log_text) == 0:
                 with io.StringIO(full_log_text) as f:
@@ -147,12 +125,10 @@ class CloseRequestConfirmView(discord.ui.View):
                 log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
                 await log_channel.send(embed=log_embed)
 
-        # 3. 運営側のチケットチャンネルを削除
         if ticket_channel:
             await asyncio.sleep(2)
             await ticket_channel.delete()
 
-        # 4. DMに評価の案内を送信
         rating_embed = discord.Embed(
             title="📝 問い合わせ評価のお願い",
             description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
@@ -226,10 +202,17 @@ def setup_modmail_events(bot: commands.Bot):
 
             if not existing_channel:
                 channel_name = f"{message.author.name.lower()}"
+                
+                # --- 【権限問題の完全自動解決】 ---
+                staff_role = guild.get_role(ADMIN_ROLE_ID)
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(read_messages=False),
                     guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
                 }
+                # 指定した管理・スタッフロールに最初から閲覧権限を付与
+                if staff_role:
+                    overwrites[staff_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_messages=True)
+
                 existing_channel = await guild.create_text_channel(
                     name=channel_name, category=category, topic=f"User ID: {message.author.id}", overwrites=overwrites
                 )
@@ -283,12 +266,11 @@ def setup_modmail_events(bot: commands.Bot):
 
 
 # ==========================================
-# コマンド定義 (?close, ?closereq, ?change staff)
+# コマンドのセットアップ
 # ==========================================
 def setup_admin_commands(bot: commands.Bot):
     setup_modmail_events(bot)
 
-    # クローズリクエスト発動コマンド (?closereq)
     @bot.command(name="closereq")
     async def close_request(ctx: commands.Context):
         if not ctx.channel.category or ctx.channel.category_id != INBOX_CATEGORY_ID: return
@@ -302,16 +284,13 @@ def setup_admin_commands(bot: commands.Bot):
             await ctx.send("❌ ユーザー情報を取得できませんでした。")
             return
 
-        # 運営側のチャンネルへアナウンス
         await ctx.send(f"📬 {user.mention} のDMへクローズ確認リクエストを送信しました。")
 
-        # ユーザーのDMへ確認メッセージを送信
         req_embed = discord.Embed(
             title="🔒 問い合わせ終了の確認",
             description=f"スタッフ（{ctx.author.mention}）より、この問い合わせを終了（クローズ）して良いかの確認が届きました。\n\n問題が解決し、チケットを閉じてよろしければ、下の**「閉じる」**ボタンを押してください。",
             color=discord.Color.yellow()
         )
-        # 承認用Viewを添えてDMへ送信
         view = CloseRequestConfirmView(
             channel_id=ctx.channel.id, user_id=user.id, channel_name=ctx.channel.name, staff_mention=ctx.author.mention
         )
@@ -320,13 +299,12 @@ def setup_admin_commands(bot: commands.Bot):
         except discord.Forbidden:
             await ctx.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
 
-    # 即時クローズ用コマンド (?close)
     @bot.command(name="close")
     async def close_ticket(ctx: commands.Context):
         if not ctx.channel.category or ctx.channel.category_id != INBOX_CATEGORY_ID: return
         if not ctx.channel.topic or "User ID:" not in ctx.channel.topic: return
 
-        await ctx.send("🔒 強制クローズ処理中... 会話ログをエクスポートしています。")
+        await ctx.send("🔒 強制クローズ処理中...")
 
         try:
             parts = ctx.channel.topic.split("|")
@@ -362,18 +340,13 @@ def setup_admin_commands(bot: commands.Bot):
 
         if user:
             try:
-                end_embed = discord.Embed(
-                    title="🔒 問い合わせクローズ",
-                    description="運営スタッフによりチケットが閉じられました。",
-                    color=discord.Color.red()
-                )
+                end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
                 await user.send(embed=end_embed)
             except: pass
 
         await asyncio.sleep(2)
         await ctx.channel.delete()
 
-    # 担当者リセット・変更 (?change staff)
     @bot.command(name="change")
     async def change_staff(ctx: commands.Context, sub_cmd: str = None):
         if sub_cmd != "staff": return
@@ -390,8 +363,5 @@ def setup_admin_commands(bot: commands.Bot):
 
         await ctx.channel.edit(name=f"{user.name.lower()}", topic=f"User ID: {user.id}")
         new_view = SupportClaimView(user_id=user.id, user_name=user.name)
-        reset_embed = discord.Embed(
-            description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。",
-            color=discord.Color.yellow()
-        )
+        reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
         await ctx.send(embed=reset_embed, view=new_view)
