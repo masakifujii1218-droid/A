@@ -354,8 +354,18 @@ def setup_admin_commands(bot: commands.Bot):
 
         if user:
             try:
+                # 1. まずクローズされた通知を送る
                 end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
                 await user.send(embed=end_embed)
+
+                # 2. 【追加】続けて星評価の案内ボタンを送る
+                rating_embed = discord.Embed(
+                    title="📝 問い合わせ評価のお願い",
+                    description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
+                    color=discord.Color.gold()
+                )
+                rating_view = StarRatingView(user_id=user.id)
+                await user.send(embed=rating_embed, view=rating_view)
             except: pass
 
         await asyncio.sleep(2)
