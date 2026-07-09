@@ -264,7 +264,11 @@ def setup_modmail_events(bot: commands.Bot):
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
+    # ✨ コマンドを正常に動かすための魔法の一行（インデント8マス）
+    await bot.process_commands(message)
 
+# ==========================================
+# 管理コマンド (運営用)
 # ==========================================
 # コマンドのセットアップ
 # ==========================================
