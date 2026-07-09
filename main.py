@@ -794,13 +794,15 @@ if __name__ == "__main__":
     web_thread.start()
     print("Web thread started")
 
-    # 🔗 sub.py のModmail機能をBotに合流させる記述を追加
+    # 🔗 sub.py のModmail機能を完全に合流・起動させる
     try:
         import sub
-        # sub.py側で初期化関数（setupやインポート時の処理）が動くように明示的に読み込みます
-        print("Modmail (sub.py) を読み込んでいます...")
+        sub.setup_admin_commands(bot)  # 👈 【ここを追加！】sub.pyの眠っていた機能を起こします
+        print("Modmail (sub.py) のイベントとコマンドを完全に読み込みました！")
     except ImportError:
         print("警告: sub.py が見つかりません。Modmail機能はスキップされます。")
+    except Exception as e:
+        print(f"sub.py の読み込み中にエラーが発生しました: {e}")
 
     # Discord Botの起動
     if TOKEN:
