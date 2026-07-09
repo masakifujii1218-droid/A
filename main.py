@@ -807,4 +807,3 @@ if __name__ == "__main__":
     # Discord Botの起動
     if TOKEN:
         bot.run(TOKEN)
-    else:
