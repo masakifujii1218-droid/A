@@ -808,4 +808,3 @@ if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("DISCORD_TOKEN が設定されていません")

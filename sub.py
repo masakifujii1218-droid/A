@@ -3,6 +3,7 @@
 # ==========================================
 import discord
 from discord.ext import commands
+from discord import app_commands
 import asyncio
 from datetime import datetime
 import io
@@ -13,7 +14,7 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID（自動権限付与用）
 
-VERSION = "v3.6.0 (Auto-Permission & Closereq)"
+VERSION = "v4.0.0 (Slash Command Migration)"
 
 # ==========================================
 # [DM用] 改善点・問題点の入力モーダル
@@ -114,7 +115,7 @@ class CloseRequestConfirmView(discord.ui.View):
         if log_channel:
             log_embed = discord.Embed(
                 title=f"🔒 チケットクローズログ: {self.channel_name}",
-                description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`?closereq`)",
+                description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`/closereq`)",
                 color=discord.Color.red(), timestamp=datetime.now()
             )
             if len(full_log_text) > 3000 or len(full_log_text) == 0:
@@ -209,7 +210,6 @@ def setup_modmail_events(bot: commands.Bot):
                     guild.default_role: discord.PermissionOverwrite(read_messages=False),
                     guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
                 }
-                # 指定した管理・スタッフロールに最初から閲覧権限を付与
                 if staff_role:
                     overwrites[staff_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_messages=True)
 
@@ -247,7 +247,7 @@ def setup_modmail_events(bot: commands.Bot):
 
         # 2. スタッフ側の発言 ➡ ユーザーのDMへ転送
         elif isinstance(message.channel, discord.TextChannel) and message.channel.category_id == INBOX_CATEGORY_ID:
-            if message.content.startswith("?"): return
+            if message.content.startswith("/"): return  # スラッシュコマンドによるメッセージは無視
             if not message.channel.topic or "User ID:" not in message.channel.topic: return
 
             try:
@@ -258,65 +258,76 @@ def setup_modmail_events(bot: commands.Bot):
 
             staff_embed = discord.Embed(description=message.content, color=discord.Color.blue())
             staff_embed.set_author(name="ダイヤ作成所", icon_url=message.guild.icon.url if message.guild.icon else None)
-            Python
+            
             try:
                 await user.send(embed=staff_embed)
                 await message.add_reaction("✈️")
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
-            await bot.process_commands(message)
 
 # ==========================================
-# 管理コマンド (運営用)
+# 管理コマンド (運営用スラッシュコマンド)
 # ==========================================
-
 def setup_admin_commands(bot: commands.Bot):
     setup_modmail_events(bot)
 
-    @bot.command(name="closereq")
-    async def close_request(ctx: commands.Context):
-        if not ctx.channel.category or ctx.channel.category_id != INBOX_CATEGORY_ID: return
-        if not ctx.channel.topic or "User ID:" not in ctx.channel.topic: return
+    # --- /closereq コマンド ---
+    @bot.tree.command(name="closereq", description="ユーザーにクローズ確認リクエストを送信します")
+    async def close_request(interaction: discord.Interaction):
+        channel = interaction.channel
+        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
+            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
+            return
+        if not channel.topic or "User ID:" not in channel.topic:
+            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
+            return
+
+        await interaction.response.defer()
 
         try:
-            parts = ctx.channel.topic.split("|")
+            parts = channel.topic.split("|")
             u_id = int(parts[0].replace("User ID:", "").strip())
             user = await bot.fetch_user(u_id)
         except:
-            await ctx.send("❌ ユーザー情報を取得できませんでした。")
+            await interaction.followup.send("❌ ユーザー情報を取得できませんでした。")
             return
-
-        await ctx.send(f"📬 {user.mention} のDMへクローズ確認リクエストを送信しました。")
 
         req_embed = discord.Embed(
             title="🔒 問い合わせ終了の確認",
-            description=f"スタッフ（{ctx.author.mention}）より、この問い合わせを終了（クローズ）して良いかの確認が届きました。\n\n問題が解決し、チケットを閉じてよろしければ、下の**「閉じる」**ボタンを押してください。",
+            description=f"スタッフ（{interaction.user.mention}）より、この問い合わせを終了（クローズ）して良いかの確認が届きました。\n\n問題が解決し、チケットを閉じてよろしければ、下の**「閉じる」**ボタンを押してください。",
             color=discord.Color.yellow()
         )
         view = CloseRequestConfirmView(
-            channel_id=ctx.channel.id, user_id=user.id, channel_name=ctx.channel.name, staff_mention=ctx.author.mention
+            channel_id=channel.id, user_id=user.id, channel_name=channel.name, staff_mention=interaction.user.mention
         )
         try:
             await user.send(embed=req_embed, view=view)
+            await interaction.followup.send(f"📬 {user.mention} のDMへクローズ確認リクエストを送信しました。")
         except discord.Forbidden:
-            await ctx.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
+            await interaction.followup.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
 
-    @bot.command(name="close")
-    async def close_ticket(ctx: commands.Context):
-        if not ctx.channel.category or ctx.channel.category_id != INBOX_CATEGORY_ID: return
-        if not ctx.channel.topic or "User ID:" not in ctx.channel.topic: return
+    # --- /close コマンド ---
+    @bot.tree.command(name="close", description="チケットを強制クローズします")
+    async def close_ticket(interaction: discord.Interaction):
+        channel = interaction.channel
+        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
+            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
+            return
+        if not channel.topic or "User ID:" not in channel.topic:
+            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
+            return
 
-        await ctx.send("🔒 強制クローズ処理中...")
+        await interaction.response.send_message("🔒 強制クローズ処理中...")
 
         try:
-            parts = ctx.channel.topic.split("|")
+            parts = channel.topic.split("|")
             u_id = int(parts[0].replace("User ID:", "").strip())
             user = await bot.fetch_user(u_id)
         except: user = None
 
         log_lines = []
-        async for msg in ctx.channel.history(limit=100, oldest_first=True):
+        async for msg in channel.history(limit=100, oldest_first=True):
             if msg.embeds:
                 for emb in msg.embeds:
                     author_name = emb.author.name if emb.author else "システム"
@@ -326,16 +337,16 @@ def setup_admin_commands(bot: commands.Bot):
 
         full_log_text = "\n".join(log_lines)
 
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             log_embed = discord.Embed(
-                title=f"🔒 チケットクローズログ: {ctx.channel.name}",
-                description=f"**対象ユーザー:** {user.mention if user else ctx.channel.name}\n**クローズ実行者:** {ctx.author.mention} (強制クローズ)",
+                title=f"🔒 チケットクローズログ: {channel.name}",
+                description=f"**対象ユーザー:** {user.mention if user else channel.name}\n**クローズ実行者:** {interaction.user.mention} (強制クローズ)",
                 color=discord.Color.red(), timestamp=datetime.now()
             )
             if len(full_log_text) > 3000 or len(full_log_text) == 0:
                 with io.StringIO(full_log_text) as f:
-                    file = discord.File(f, filename=f"log-{ctx.channel.name}.txt")
+                    file = discord.File(f, filename=f"log-{channel.name}.txt")
                     await log_channel.send(embed=log_embed, file=file)
             else:
                 log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
@@ -348,23 +359,28 @@ def setup_admin_commands(bot: commands.Bot):
             except: pass
 
         await asyncio.sleep(2)
-        await ctx.channel.delete()
+        await channel.delete()
 
-    @bot.command(name="change")
-    async def change_staff(ctx: commands.Context, sub_cmd: str = None):
-        if sub_cmd != "staff": return
-        if not ctx.channel.category or ctx.channel.category_id != INBOX_CATEGORY_ID: return
-        if not ctx.channel.topic or "User ID:" not in ctx.channel.topic: return
-
-        try:
-            parts = ctx.channel.topic.split("|")
-            u_id = int(parts[0].replace("User ID:", "").strip())
-            user = await bot.fetch_user(u_id)
-        except:
-            await ctx.send("❌ ユーザー情報の解析に失敗しました。")
+    # --- /change_staff コマンド ---
+    @bot.tree.command(name="change_staff", description="チケットの担当スタッフをリセットして交代します")
+    async def change_staff(interaction: discord.Interaction):
+        channel = interaction.channel
+        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
+            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
+            return
+        if not channel.topic or "User ID:" not in channel.topic:
+            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
             return
 
-        await ctx.channel.edit(name=f"{user.name.lower()}", topic=f"User ID: {user.id}")
+        try:
+            parts = channel.topic.split("|")
+            u_id = int(parts[0].replace("User ID:", "").strip())
+            user = await interaction.client.fetch_user(u_id)
+        except:
+            await interaction.response.send_message("❌ ユーザー情報の解析に失敗しました。", ephemeral=True)
+            return
+
+        await channel.edit(name=f"{user.name.lower()}", topic=f"User ID: {user.id}")
         new_view = SupportClaimView(user_id=user.id, user_name=user.name)
         reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
-        await ctx.send(embed=reset_embed, view=new_view)
+        await interaction.response.send_message(embed=reset_embed, view=new_view)
