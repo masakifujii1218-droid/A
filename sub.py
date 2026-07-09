@@ -257,21 +257,20 @@ def setup_modmail_events(bot: commands.Bot):
             except: return
 
             staff_embed = discord.Embed(description=message.content, color=discord.Color.blue())
-            staff_embed.set_author(name="サーバー運営チーム (返信)", icon_url=message.guild.icon.url if message.guild.icon else None)
+            staff_embed.set_author(name="ダイヤ作成所", icon_url=message.guild.icon.url if message.guild.icon else None)
+            Python
             try:
                 await user.send(embed=staff_embed)
                 await message.add_reaction("✈️")
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
-    # ✨ コマンドを正常に動かすための魔法の一行（インデント8マス）
-    await bot.process_commands(message)
+            await bot.process_commands(message)
 
 # ==========================================
 # 管理コマンド (運営用)
 # ==========================================
-# コマンドのセットアップ
-# ==========================================
+
 def setup_admin_commands(bot: commands.Bot):
     setup_modmail_events(bot)
 
