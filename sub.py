@@ -17,7 +17,7 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v5.0.0 (Modmail + Point System)"
+VERSION = "v5.1.0 (Modmail + Point System 100 Logs)"
 
 # --- ポイントシステム用設定 ---
 POINTS_FILE = "points.json"
@@ -478,7 +478,7 @@ def setup_admin_commands(bot: commands.Bot):
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
     # --- /pointlog コマンド ---
-    @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を確認します")
+    @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
         target_user = ユーザー or interaction.user
         data = load_points_data()
@@ -494,11 +494,23 @@ def setup_admin_commands(bot: commands.Bot):
         logs = user_data.get("logs", [])
         if not logs:
             embed.description += "\n\n*履歴はまだありません。*"
-        else:
-            recent_logs = list(reversed(logs))[:10]
-            embed.add_field(name="直近の履歴（最大10件）", value="\n".join(recent_logs), inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
 
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        # 変更点: 直近最大100件を逆順（新しい順）で取得
+        recent_logs = list(reversed(logs))[:100]
+        full_log_text = "\n".join(recent_logs)
+
+        # Discordの1フィールド1024文字制限に対する安全対策
+        # 目安として850文字（約20件以上）を超える場合は自動的にテキストファイルで添付
+        if len(full_log_text) > 850:
+            embed.description += "\n\n📋 履歴数が多いため、テキストファイル（通帳）を作成して添付しました。ダウンロードしてご確認ください。"
+            with io.StringIO(full_log_text) as f:
+                file = discord.File(f, filename=f"passbook-{target_user.name}.txt")
+                await interaction.response.send_message(embed=embed, file=file, ephemeral=False)
+        else:
+            embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
 
     # --- /give_points コマンド ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
@@ -553,8 +565,8 @@ def setup_admin_commands(bot: commands.Bot):
         save_points_data(data)
 
         res_embed = discord.Embed(
-            title="⚠️ ポイント消費完了",
-            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費（削除）しました。\n目的・理由: {理由}",
+            title="⚠️ ポイント消費",
+            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費しました。\n目的・理由: {理由}",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
