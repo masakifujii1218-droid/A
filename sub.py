@@ -1,5 +1,5 @@
 # ==========================================
-# sub.py (Modmailシステム + 権限自動付与 ＆ クローズリクエスト)
+# sub.py (Modmailシステム + ポイント＆通帳システム)
 # ==========================================
 import discord
 from discord.ext import commands
@@ -7,14 +7,46 @@ from discord import app_commands
 import asyncio
 from datetime import datetime
 import io
+import os
+import json
+import random
 
 # --- 固定設定 ---
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
 LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
-ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID（自動権限付与用）
+ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v4.0.0 (Slash Command Migration)"
+VERSION = "v5.0.0 (Modmail + Point System)"
+
+# --- ポイントシステム用設定 ---
+POINTS_FILE = "points.json"
+LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
+WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900    # /give_points, /take_points を実行できるロールID
+
+# ==========================================
+# ポイントデータ管理関数
+# ==========================================
+def load_points_data():
+    if not os.path.exists(POINTS_FILE):
+        with open(POINTS_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+    try:
+        with open(POINTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_points_data(data):
+    with open(POINTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def get_user_data(user_id: str, data: dict):
+    if user_id not in data:
+        data[user_id] = {"points": 0, "logs": []}
+    return data[user_id]
+
 
 # ==========================================
 # [DM用] 改善点・問題点の入力モーダル
@@ -50,6 +82,7 @@ class FeedbackModal(discord.ui.Modal):
             await rating_channel.send(embed=embed)
         await interaction.followup.send("ご協力ありがとうございました！", ephemeral=True)
 
+
 # ==========================================
 # [DM用] 星評価（0〜5）のボタン
 # ==========================================
@@ -76,6 +109,7 @@ class StarRatingView(discord.ui.View):
     async def star4(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 4)
     @discord.ui.button(label="⭐5", style=discord.ButtonStyle.primary, custom_id="star_5")
     async def star5(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 5)
+
 
 # ==========================================
 # [DM用] クローズ同意ボタン
@@ -204,7 +238,6 @@ def setup_modmail_events(bot: commands.Bot):
             if not existing_channel:
                 channel_name = f"{message.author.name.lower()}"
                 
-                # --- 【権限問題の完全自動解決】 ---
                 staff_role = guild.get_role(ADMIN_ROLE_ID)
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -247,7 +280,7 @@ def setup_modmail_events(bot: commands.Bot):
 
         # 2. スタッフ側の発言 ➡ ユーザーのDMへ転送
         elif isinstance(message.channel, discord.TextChannel) and message.channel.category_id == INBOX_CATEGORY_ID:
-            if message.content.startswith("/"): return  # スラッシュコマンドによるメッセージは無視
+            if message.content.startswith("/"): return
             if not message.channel.topic or "User ID:" not in message.channel.topic: return
 
             try:
@@ -267,7 +300,7 @@ def setup_modmail_events(bot: commands.Bot):
 
 
 # ==========================================
-# 管理コマンド (運営用スラッシュコマンド)
+# 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
 def setup_admin_commands(bot: commands.Bot):
     setup_modmail_events(bot)
@@ -354,11 +387,9 @@ def setup_admin_commands(bot: commands.Bot):
 
         if user:
             try:
-                # 1. まずクローズされた通知を送る
                 end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
                 await user.send(embed=end_embed)
 
-                # 2. 【追加】続けて星評価の案内ボタンを送る
                 rating_embed = discord.Embed(
                     title="📝 問い合わせ評価のお願い",
                     description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
@@ -394,3 +425,149 @@ def setup_admin_commands(bot: commands.Bot):
         new_view = SupportClaimView(user_id=user.id, user_name=user.name)
         reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
         await interaction.response.send_message(embed=reset_embed, view=new_view)
+
+
+    # ==========================================
+    # ポイントシステム スラッシュコマンド
+    # ==========================================
+
+    # --- /work コマンド ---
+    @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
+    async def work_command(interaction: discord.Interaction):
+        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+
+        if random.random() < 0.70:
+            earned = random.randint(200, 300)
+        else:
+            earned = random.choice([random.randint(50, 199), random.randint(301, 400)])
+
+        data = load_points_data()
+        user_data = get_user_data(str(interaction.user.id), data)
+        user_data["points"] += earned
+        
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        user_data["logs"].append(f"[{now_str}] 🪙 +{earned} pt (お仕事報酬)")
+        save_points_data(data)
+
+        embed = discord.Embed(
+            title="💼 お仕事完了！",
+            description=f"{interaction.user.mention}さんが仕事を完了しました。\n\n獲得: **{earned}** ポイント 🪙",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="現在の総保有", value=f"`{user_data['points']} pt`")
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # --- /points コマンド ---
+    @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
+    async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
+        target_user = ユーザー or interaction.user
+        data = load_points_data()
+        user_data = get_user_data(str(target_user.id), data)
+
+        embed = discord.Embed(
+            title="🪙 保有ポイント確認",
+            description=f"{target_user.mention} さんの現在の通帳残高です。",
+            color=discord.Color.gold(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # --- /pointlog コマンド ---
+    @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を確認します")
+    async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
+        target_user = ユーザー or interaction.user
+        data = load_points_data()
+        user_data = get_user_data(str(target_user.id), data)
+
+        embed = discord.Embed(
+            title="📜 ポイント利用明細（通帳）",
+            description=f"{target_user.mention} さんの過去の履歴です。",
+            color=discord.Color.blue(),
+            timestamp=datetime.now()
+        )
+
+        logs = user_data.get("logs", [])
+        if not logs:
+            embed.description += "\n\n*履歴はまだありません。*"
+        else:
+            recent_logs = list(reversed(logs))[:10]
+            embed.add_field(name="直近の履歴（最大10件）", value="\n".join(recent_logs), inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # --- /give_points コマンド ---
+    @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
+    async def give_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+
+        data = load_points_data()
+        user_data = get_user_data(str(ユーザー.id), data)
+        user_data["points"] += ポイント数
+        
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        user_data["logs"].append(f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})")
+        save_points_data(data)
+
+        res_embed = discord.Embed(
+            title="✅ ポイント付与完了",
+            description=f"{ユーザー.mention} に **{ポイント数}** ポイントを付与しました。\n理由: {理由}",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=res_embed, ephemeral=False)
+
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
+        if log_channel:
+            noti_embed = discord.Embed(
+                title="📥 ポイント変動通知 (付与)",
+                color=discord.Color.green(),
+                timestamp=datetime.now()
+            )
+            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
+            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
+            noti_embed.add_field(name="理由", value=理由, inline=False)
+            await log_channel.send(embed=noti_embed)
+
+    # --- /take_points コマンド ---
+    @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
+    async def take_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=False)
+            return
+
+        data = load_points_data()
+        user_data = get_user_data(str(ユーザー.id), data)
+        user_data["points"] -= ポイント数
+        
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        user_data["logs"].append(f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})")
+        save_points_data(data)
+
+        res_embed = discord.Embed(
+            title="⚠️ ポイント消費完了",
+            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費（削除）しました。\n使用目的・理由: {理由}",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=res_embed, ephemeral=False)
+
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
+        if log_channel:
+            noti_embed = discord.Embed(
+                title="📤 ポイント変動通知 (消費)",
+                color=discord.Color.red(),
+                timestamp=datetime.now()
+            )
+            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
+            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
+            noti_embed.add_field(name="使用用途（理由）", value=理由, inline=False)
+            await log_channel.send(embed=noti_embed)
