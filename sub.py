@@ -17,10 +17,9 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v5.2.0 (Modmail + Safe Point System)"
+VERSION = "v5.3.0 (Modmail + Cooldown Point System)"
 
 # --- ポイントシステム用設定 ---
-# 1. 保存先をプログラムの絶対パスに固定（GitHub更新時のデータ消失対策）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POINTS_FILE = os.path.join(BASE_DIR, "points.json")
 
@@ -438,8 +437,9 @@ def setup_admin_commands(bot: commands.Bot):
     # ポイントシステム スラッシュコマンド
     # ==========================================
 
-    # --- /work コマンド ---
+    # --- /work コマンド (8時間のクールタイム設定) ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
+    @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id) # 1回/28800秒 (8時間) ユーザーごと
     async def work_command(interaction: discord.Interaction):
         if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
@@ -467,6 +467,31 @@ def setup_admin_commands(bot: commands.Bot):
         )
         embed.add_field(name="現在の総保有", value=f"`{user_data['points']} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # クールタイム発生時のエラーハンドリング
+    @work_command.error
+    async def work_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CommandOnCooldown):
+            # 残り時間を計算 (時間と分に変換)
+            total_seconds = int(error.retry_after)
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            
+            time_str = ""
+            if hours > 0:
+                time_str += f"**{hours}時間** "
+            time_str += f"**{minutes}分**"
+            
+            embed = discord.Embed(
+                title="⏳ まだお仕事はできません",
+                description=f"お仕事のやりすぎです！体を壊してしまいますよ。\n次のお仕事まであと {time_str} お待ちください。",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            # その他の想定外エラー
+            embed = discord.Embed(description="❌ コマンドの実行中にエラーが発生しました。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
