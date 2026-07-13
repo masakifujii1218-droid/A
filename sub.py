@@ -17,10 +17,13 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v5.1.0 (Modmail + Point System 100 Logs)"
+VERSION = "v5.2.0 (Modmail + Safe Point System)"
 
 # --- ポイントシステム用設定 ---
-POINTS_FILE = "points.json"
+# 1. 保存先をプログラムの絶対パスに固定（GitHub更新時のデータ消失対策）
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POINTS_FILE = os.path.join(BASE_DIR, "points.json")
+
 LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
 WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
 ADMIN_ROLE_ID_POINTS = 1510405214811852900    # /give_points, /take_points を実行できるロールID
@@ -35,12 +38,16 @@ def load_points_data():
     try:
         with open(POINTS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception as e:
+        print(f"【エラー】データ読み込みに失敗しました: {e}")
         return {}
 
 def save_points_data(data):
-    with open(POINTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    try:
+        with open(POINTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"【エラー】データ保存に失敗しました: {e}")
 
 def get_user_data(user_id: str, data: dict):
     if user_id not in data:
@@ -497,12 +504,9 @@ def setup_admin_commands(bot: commands.Bot):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
 
-        # 変更点: 直近最大100件を逆順（新しい順）で取得
         recent_logs = list(reversed(logs))[:100]
         full_log_text = "\n".join(recent_logs)
 
-        # Discordの1フィールド1024文字制限に対する安全対策
-        # 目安として850文字（約20件以上）を超える場合は自動的にテキストファイルで添付
         if len(full_log_text) > 850:
             embed.description += "\n\n📋 履歴数が多いため、テキストファイル（通帳）を作成して添付しました。ダウンロードしてご確認ください。"
             with io.StringIO(full_log_text) as f:
