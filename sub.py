@@ -469,8 +469,8 @@ def setup_admin_commands(bot: commands.Bot):
         user_data = get_user_data(str(target_user.id), data)
 
         embed = discord.Embed(
-            title="🪙 保有ポイント確認",
-            description=f"{target_user.mention} さんの現在の通帳残高です。",
+            title="🪙 ポイント確認",
+            description=f"{target_user.mention} さんの現在の残高です。",
             color=discord.Color.gold(),
             timestamp=datetime.now()
         )
@@ -554,7 +554,7 @@ def setup_admin_commands(bot: commands.Bot):
 
         res_embed = discord.Embed(
             title="⚠️ ポイント消費完了",
-            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費（削除）しました。\n使用目的・理由: {理由}",
+            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費（削除）しました。\n目的・理由: {理由}",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
