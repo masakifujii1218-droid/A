@@ -1,15 +1,15 @@
 # ==========================================
-# sub.py (Modmailシステム + ポイント＆通帳システム)
+# sub.py (Modmailシステム + 1時間自動同期・復元付きポイントシステム)
 # ==========================================
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks  # tasksを追加
 from discord import app_commands
 import asyncio
 from datetime import datetime
 import io
 import os
-import json
 import random
+import json
 
 # --- 固定設定 ---
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
@@ -17,41 +17,83 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v5.3.0 (Modmail + Cooldown Point System)"
+VERSION = "v7.0.0 (Modmail + Hourly Sync Point System)"
 
 # --- ポイントシステム用設定 ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-POINTS_FILE = os.path.join(BASE_DIR, "points.json")
-
 LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
 WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
-ADMIN_ROLE_ID_POINTS = 1510405214811852900    # /give_points, /take_points を実行できるロールID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POINTS_FILE = os.path.join(BASE_DIR, "points.json")
+# 🌟 Renderの再起動対策：1時間ごとにデータを逃がしておく秘密の同期ファイル
+BACKUP_FILE = os.path.join(BASE_DIR, "points_hourly_sync.json")
+
+points_data = {}
 
 # ==========================================
-# ポイントデータ管理関数
+# ポイントデータ管理関数 (1時間自動同期・復元対応)
 # ==========================================
-def load_points_data():
-    if not os.path.exists(POINTS_FILE):
-        with open(POINTS_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f)
-    try:
-        with open(POINTS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"【エラー】データ読み込みに失敗しました: {e}")
-        return {}
+def load_points():
+    global points_data
+    
+    # 1. 通常のデータファイルがあれば最優先で読み込む
+    if os.path.exists(POINTS_FILE):
+        try:
+            with open(POINTS_FILE, "r", encoding="utf-8") as f:
+                points_data = json.load(f)
+                print("【システム】通常のポイントデータを読み込みました。")
+                return
+        except Exception as e:
+            print(f"データ読み込み失敗: {e}")
 
-def save_points_data(data):
+    # 2. 【最重要】Renderの再起動等でpoints.jsonが消えていた場合、1時間前の同期ファイルから自動復元
+    if os.path.exists(BACKUP_FILE):
+        try:
+            with open(BACKUP_FILE, "r", encoding="utf-8") as f:
+                points_data = json.load(f)
+                print("⚠️【警告】データが消失していたため、1時間前の同期データから自動復元しました！")
+                save_points()  # 復元したデータを通常ファイルとして保存
+                return
+        except Exception as e:
+            print(f"バックアップからの復元失敗: {e}")
+
+    # 3. どちらもなければ新規作成
+    points_data = {}
+    print("【システム】新規ポイントデータを作成しました。")
+
+def save_points():
     try:
         with open(POINTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            json.dump(points_data, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"【エラー】データ保存に失敗しました: {e}")
+        print(f"データ保存失敗: {e}")
 
-def get_user_data(user_id: str, data: dict):
-    if user_id not in data:
-        data[user_id] = {"points": 0, "logs": []}
-    return data[user_id]
+def get_user_data(user_id: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+        save_points()
+    return points_data[user_id]
+
+def update_user_data(user_id: str, points: int, log_entry: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+    points_data[user_id]["points"] = points
+    points_data[user_id]["logs"].append(log_entry)
+    save_points()
+
+# ==========================================
+# 🕒 1時間ごとにポイントを同期（固定）するループタスク
+# ==========================================
+@tasks.loop(hours=1)
+async def sync_points_hourly():
+    global points_data
+    try:
+        with open(BACKUP_FILE, "w", encoding="utf-8") as f:
+            json.dump(points_data, f, ensure_ascii=False, indent=4)
+        print(f"🕒【同期完了】現在のポイント数を1時間前として固定しました ({datetime.now().strftime('%H:%M')})")
+    except Exception as e:
+        print(f"定期同期失敗: {e}")
 
 
 # ==========================================
@@ -394,7 +436,7 @@ def setup_admin_commands(bot: commands.Bot):
         if user:
             try:
                 end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
-                await user.send(embed=end_embed)
+                await user.send(end_embed)
 
                 rating_embed = discord.Embed(
                     title="📝 問い合わせ評価のお願い",
@@ -434,12 +476,12 @@ def setup_admin_commands(bot: commands.Bot):
 
 
     # ==========================================
-    # ポイントシステム スラッシュコマンド
+    # ポイントシステム スラッシュコマンド (通常版)
     # ==========================================
 
-    # --- /work コマンド (8時間のクールタイム設定) ---
+    # --- /work コマンド ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
-    @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id) # 1回/28800秒 (8時間) ユーザーごと
+    @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
     async def work_command(interaction: discord.Interaction):
         if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
@@ -451,13 +493,14 @@ def setup_admin_commands(bot: commands.Bot):
         else:
             earned = random.choice([random.randint(50, 199), random.randint(301, 400)])
 
-        data = load_points_data()
-        user_data = get_user_data(str(interaction.user.id), data)
-        user_data["points"] += earned
+        user_id_str = str(interaction.user.id)
+        user_data = get_user_data(user_id_str)
+        new_points = user_data["points"] + earned
         
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        user_data["logs"].append(f"[{now_str}] 🪙 +{earned} pt (お仕事報酬)")
-        save_points_data(data)
+        log_entry = f"[{now_str}] 🪙 +{earned} pt (お仕事報酬)"
+        
+        update_user_data(user_id_str, new_points, log_entry)
 
         embed = discord.Embed(
             title="💼 お仕事完了！",
@@ -465,40 +508,30 @@ def setup_admin_commands(bot: commands.Bot):
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
-        embed.add_field(name="現在の総保有", value=f"`{user_data['points']} pt`")
+        embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # クールタイム発生時のエラーハンドリング
     @work_command.error
     async def work_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CommandOnCooldown):
-            # 残り時間を計算 (時間と分に変換)
             total_seconds = int(error.retry_after)
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
-            
-            time_str = ""
-            if hours > 0:
-                time_str += f"**{hours}時間** "
+            time_str = f"**{hours}時間** " if hours > 0 else ""
             time_str += f"**{minutes}分**"
             
             embed = discord.Embed(
                 title="⏳ まだお仕事はできません",
-                description=f"お仕事のやりすぎです！体を壊してしまいますよ。\n次のお仕事まであと {time_str} お待ちください。",
+                description=f"お仕事のやりすぎです！次のお仕事まであと {time_str} お待ちください。",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            # その他の想定外エラー
-            embed = discord.Embed(description="❌ コマンドの実行中にエラーが発生しました。", color=discord.Color.red())
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
     async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
         target_user = ユーザー or interaction.user
-        data = load_points_data()
-        user_data = get_user_data(str(target_user.id), data)
+        user_data = get_user_data(str(target_user.id))
 
         embed = discord.Embed(
             title="🪙 ポイント確認",
@@ -513,8 +546,7 @@ def setup_admin_commands(bot: commands.Bot):
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
         target_user = ユーザー or interaction.user
-        data = load_points_data()
-        user_data = get_user_data(str(target_user.id), data)
+        user_data = get_user_data(str(target_user.id))
 
         embed = discord.Embed(
             title="📜 ポイント利用明細（通帳）",
@@ -533,7 +565,7 @@ def setup_admin_commands(bot: commands.Bot):
         full_log_text = "\n".join(recent_logs)
 
         if len(full_log_text) > 850:
-            embed.description += "\n\n📋 履歴数が多いため、テキストファイル（通帳）を作成して添付しました。ダウンロードしてご確認ください。"
+            embed.description += "\n\n📋 履歴数が多いため、テキストファイルを作成して添付しました。"
             with io.StringIO(full_log_text) as f:
                 file = discord.File(f, filename=f"passbook-{target_user.name}.txt")
                 await interaction.response.send_message(embed=embed, file=file, ephemeral=False)
@@ -549,13 +581,14 @@ def setup_admin_commands(bot: commands.Bot):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
 
-        data = load_points_data()
-        user_data = get_user_data(str(ユーザー.id), data)
-        user_data["points"] += ポイント数
+        user_id_str = str(ユーザー.id)
+        user_data = get_user_data(user_id_str)
+        new_points = user_data["points"] + ポイント数
         
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        user_data["logs"].append(f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})")
-        save_points_data(data)
+        log_entry = f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})"
+        
+        update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="✅ ポイント付与完了",
@@ -566,11 +599,7 @@ def setup_admin_commands(bot: commands.Bot):
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
-            noti_embed = discord.Embed(
-                title="📥 ポイント変動通知 (付与)",
-                color=discord.Color.green(),
-                timestamp=datetime.now()
-            )
+            noti_embed = discord.Embed(title="📥 ポイント変動通知 (付与)", color=discord.Color.green(), timestamp=datetime.now())
             noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
@@ -585,13 +614,14 @@ def setup_admin_commands(bot: commands.Bot):
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
 
-        data = load_points_data()
-        user_data = get_user_data(str(ユーザー.id), data)
-        user_data["points"] -= ポイント数
+        user_id_str = str(ユーザー.id)
+        user_data = get_user_data(user_id_str)
+        new_points = user_data["points"] - ポイント数
         
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        user_data["logs"].append(f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})")
-        save_points_data(data)
+        log_entry = f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})"
+        
+        update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="⚠️ ポイント消費",
@@ -602,11 +632,7 @@ def setup_admin_commands(bot: commands.Bot):
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
-            noti_embed = discord.Embed(
-                title="📤 ポイント変動通知 (消費)",
-                color=discord.Color.red(),
-                timestamp=datetime.now()
-            )
+            noti_embed = discord.Embed(title="📤 ポイント変動通知 (消費)", color=discord.Color.red(), timestamp=datetime.now())
             noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
