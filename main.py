@@ -48,7 +48,7 @@ except ModuleNotFoundError:
 # ==========================================
 try:
     import discord
-    from discord.ext import commands
+    from discord.ext import commands, tasks  # 👈 tasks を追加して定時処理を可能に
     from discord import app_commands
 except ModuleNotFoundError:
     class DummyChoice:
@@ -102,6 +102,18 @@ except ModuleNotFoundError:
     discord = DummyDiscord()
     app_commands = DummyAppCommands()
     commands = None
+    
+    # ダミーのtasksクラス
+    class DummyTasks:
+        @staticmethod
+        def loop(*args, **kwargs):
+            def deco(func):
+                class DummyLoop:
+                    def start(self): pass
+                    def is_running(self): return False
+                return DummyLoop()
+            return deco
+    tasks = DummyTasks()
 
 # ==========================================
 # Bot初期化
@@ -774,12 +786,37 @@ async def create_emp(interaction: discord.Interaction, 編成数: int):
     await interaction.response.send_modal(TrainInfoModal(route_name, 1, 編成数, [], generate_emp_timetable))
 
 # ==========================================
+# 🔄 Render再起動対策（1時間ごとの同期ループ）
+# ==========================================
+@tasks.loop(hours=1)
+async def auto_backup_loop():
+    try:
+        if hasattr(sub, "sync_data"):
+            await sub.sync_data(bot)
+            print("【Render対策】1時間ごとの自動同期を正常に実行しました。")
+    except Exception as e:
+        print(f"【Render対策】自動同期中にエラーが発生しました: {e}")
+
+# ==========================================
 # システム起動処理
 # ==========================================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"{bot.user} でログインしました")
+    
+    # 🔄 起動時（再起動後）のデータ自動復元処理
+    try:
+        if hasattr(sub, "restore_data"):
+            await sub.restore_data(bot)
+            print("【Render対策】再起動前のデータをDiscordサーバーから自動復元しました！")
+    except Exception as e:
+        print(f"【Render対策】データ復元中にエラーが発生しました: {e}")
+        
+    # 🔄 自動バックアップループの開始
+    if commands is not None and not auto_backup_loop.is_running():
+        auto_backup_loop.start()
+        print("【Render対策】1時間ごとの自動同期ループを開始しました。")
 
 def start_web_server():
     port = int(os.environ.get("PORT", "5000"))
@@ -797,7 +834,7 @@ if __name__ == "__main__":
     # 🔗 sub.py のModmail機能を完全に合流・起動させる
     try:
         import sub
-        sub.setup_admin_commands(bot)  # 👈 【ここを追加！】sub.pyの眠っていた機能を起こします
+        sub.setup_admin_commands(bot)  # sub.pyの眠っていた機能を起こします
         print("Modmail (sub.py) のイベントとコマンドを完全に読み込みました！")
     except ImportError:
         print("警告: sub.py が見つかりません。Modmail機能はスキップされます。")
