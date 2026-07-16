@@ -8,7 +8,7 @@ import io
 from datetime import datetime
 
 # ==========================================
-# 設定エリア（IDを設定しました！）
+# 設定エリア（ご指定のIDを設定しました！）
 # ==========================================
 # 👑 バックアップ専用チャンネルID
 BACKUP_CHANNEL_ID = 1527164312634920980
@@ -17,8 +17,8 @@ BACKUP_CHANNEL_ID = 1527164312634920980
 LOG_CHANNEL_ID_POINTS = 1526289865719943329
 
 # 既存の設定
-INBOX_CATEGORY_ID = 1513901626610553043  # 問い合わせカテゴリID（必要に応じて変更してください）
-LOG_CHANNEL_ID = 1513901627415855256     # チケットログチャンネルID（必要に応じて変更してください）
+INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID（必要に応じて変更してください）
+LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID（必要に応じて変更してください）
 
 # 🎯 権限ロールID
 WORK_ROLE_ID = 1510021467155202057          # /work, /points, /pointlog を実行できるロールID
@@ -148,21 +148,110 @@ async def setup_sub_system(bot):
     await load_points_from_discord(bot)
 
 # ==========================================
-# チケット管理Views (元の挙動を維持)
+# チケット管理Views & クイズクラス (すべて復元！)
 # ==========================================
 
 class StarRatingView(discord.ui.View):
     def __init__(self, user_id: int):
         super().__init__(timeout=None)
         self.user_id = user_id
-        pass
+
+    @discord.ui.button(label="⭐1", style=discord.ButtonStyle.secondary, custom_id="rate_1")
+    async def rate_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_rating(interaction, 1)
+
+    @discord.ui.button(label="⭐2", style=discord.ButtonStyle.secondary, custom_id="rate_2")
+    async def rate_2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_rating(interaction, 2)
+
+    @discord.ui.button(label="⭐3", style=discord.ButtonStyle.secondary, custom_id="rate_3")
+    async def rate_3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_rating(interaction, 3)
+
+    @discord.ui.button(label="⭐4", style=discord.ButtonStyle.secondary, custom_id="rate_4")
+    async def rate_4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_rating(interaction, 4)
+
+    @discord.ui.button(label="⭐5", style=discord.ButtonStyle.secondary, custom_id="rate_5")
+    async def rate_5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process_rating(interaction, 5)
+
+    async def process_rating(self, interaction: discord.Interaction, stars: int):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ あなたはこの問い合わせの当事者ではないため、評価できません。", ephemeral=True)
+            return
+        await interaction.response.send_message(f"💖 ご協力ありがとうございました！今回の対応を **⭐{stars}** で受け付けました。", ephemeral=True)
+        self.stop()
+
 
 class SupportClaimView(discord.ui.View):
     def __init__(self, user_id: int, user_name: str):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.user_name = user_name
-        pass
+
+    @discord.ui.button(label="🙋‍♂️ 対応を担当する", style=discord.ButtonStyle.green, custom_id="claim_ticket_btn")
+    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.channel
+        await channel.edit(name=f"担当-{interaction.user.name}", topic=f"User ID: {self.user_id} | Staff: {interaction.user.id}")
+        
+        embed = discord.Embed(
+            title="🤝 担当者が決定しました",
+            description=f"この問い合わせは {interaction.user.mention} が担当します。\nよろしくお願いいたします！",
+            color=discord.Color.blue()
+        )
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await channel.send(embed=embed)
+
+
+class QuizGameView(discord.ui.View):
+    """クイズ用の三択・四択ボタンビュー"""
+    def __init__(self, correct_idx: int, choices: list, question_id: str, bot_client):
+        super().__init__(timeout=15.0)
+        self.correct_idx = correct_idx
+        self.choices = choices
+        self.question_id = question_id
+        self.bot_client = bot_client
+        self.answered_users = set()
+
+        for idx, choice in enumerate(choices):
+            style = discord.ButtonStyle.secondary
+            btn = discord.ui.Button(label=f"{idx+1}. {choice}", style=style, custom_id=f"quiz_choice_{idx}")
+            btn.callback = self.make_callback(idx)
+            self.add_item(btn)
+
+    def make_callback(self, idx: int):
+        async def callback(interaction: discord.Interaction):
+            user_id_str = str(interaction.user.id)
+            if user_id_str in self.answered_users:
+                await interaction.response.send_message("❌ すでにこのクイズに回答しています！", ephemeral=True)
+                return
+
+            self.answered_users.add(user_id_str)
+
+            if idx == self.correct_idx:
+                user_data = get_user_data(user_id_str)
+                new_points = user_data["points"] + 50
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                log_entry = f"[{now_str}] 🪙 +50 pt (クイズ正解報酬)"
+                await update_user_data_async(self.bot_client, user_id_str, new_points, log_entry)
+
+                await interaction.response.send_message(
+                    f"🎉 正解です！\nあなたの選んだ「{self.choices[idx]}」は正しい回答です！\n**50ポイント** 🪙 を獲得しました！ (現在の所持: `{new_points} pt`)",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ 残念、不正解です！\n正解は「{self.correct_idx+1}. {self.choices[self.correct_idx]}」でした。",
+                    ephemeral=True
+                )
+        return callback
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        self.stop()
 
 # ==========================================
 # スラッシュコマンド（チケット＆ポイント統合）
@@ -170,6 +259,57 @@ class SupportClaimView(discord.ui.View):
 
 def setup_slash_commands(bot: discord.Client):
     """メイン側からすべてのコマンドを登録します"""
+
+    # --- /create_ticket_panel (問い合わせパネル作成) ---
+    @bot.tree.command(name="create_ticket_panel", description="問い合わせを開始するためのパネル（ボタン付きメッセージ）を設置します")
+    async def create_ticket_panel_command(interaction: discord.Interaction):
+        # 権限チェック
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📩 問い合わせ窓口",
+            description="チケットを開いて、運営スタッフへの個別問い合わせチャネルを作成します。\n下のボタンをクリックして開始してください。",
+            color=discord.Color.blue()
+        )
+        
+        class CreateTicketView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=None)
+            
+            @discord.ui.button(label="✉️ チケットを開く", style=discord.ButtonStyle.primary, custom_id="open_ticket_btn_main")
+            async def open_ticket(self, press_interaction: discord.Interaction, button: discord.ui.Button):
+                await press_interaction.response.send_message("🔄 チケットを開設しています...", ephemeral=True)
+                
+                guild = press_interaction.guild
+                category = guild.get_channel(INBOX_CATEGORY_ID)
+                
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    press_interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                    guild.get_role(ADMIN_ROLE_ID_POINTS): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+                
+                channel_name = f"ticket-{press_interaction.user.name.lower()}"
+                ticket_channel = await guild.create_text_channel(
+                    name=channel_name,
+                    category=category,
+                    overwrites=overwrites,
+                    topic=f"User ID: {press_interaction.user.id}"
+                )
+                
+                claim_view = SupportClaimView(user_id=press_interaction.user.id, user_name=press_interaction.user.name)
+                welcome_embed = discord.Embed(
+                    title="🔔 チケットが開かれました",
+                    description=f"{press_interaction.user.mention}さん、ようこそ。\nこちらにお問い合わせ内容をご記入ください。\n運営スタッフが対応するまで今しばらくお待ちください。",
+                    color=discord.Color.green()
+                )
+                await ticket_channel.send(embed=welcome_embed, view=claim_view)
+        
+        await interaction.response.send_message("✅ 問い合わせパネルを作成しました。", ephemeral=True)
+        await interaction.channel.send(embed=embed, view=CreateTicketView())
 
     # --- /close_ticket コマンド ---
     @bot.tree.command(name="close_ticket", description="【運営専用】この問い合わせチケットをクローズします")
