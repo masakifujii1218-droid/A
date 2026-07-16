@@ -10,6 +10,7 @@ import io
 import os
 import random
 import json
+import quiz
 
 # --- 固定設定 ---
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
