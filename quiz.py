@@ -5,9 +5,6 @@ import random
 import os
 from datetime import datetime
 
-# 💡 sub.py から、すでに完成している便利な「ポイント読み書き・ログ保存関数」をそのままお借りします！
-from sub import get_user_data, update_user_data
-
 QUIZ_FILE_PATH = "quiz_data.json"
 
 def load_quiz_data():
@@ -23,13 +20,16 @@ def setup_quiz_command(tree: app_commands.CommandTree):
     async def quiz(interaction: discord.Interaction, bet: int):
         user_id = str(interaction.user.id)
         
+        # 💡 循環インポートを防ぐため、ここでsub.pyをインポートします
+        import sub
+        
         # 1. ベット額の範囲制限
         if bet < 100 or bet > 1000:
             await interaction.response.send_message("❌ ベット額は100ptから1000ptの間で指定してください！", ephemeral=True)
             return
 
         # 2. 所持ポイントの確認（sub.pyの関数を使用）
-        user_data = get_user_data(user_id)
+        user_data = sub.get_user_data(user_id)
         user_points = user_data.get("points", 0)
         
         if user_points < bet:
@@ -50,7 +50,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
             @discord.ui.button(label="簡単 (+25% / 全没収)", style=discord.ButtonStyle.success)
             async def easy(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 if button_interaction.user.id != interaction.user.id:
-                    await button_interaction.response.send_message("これはあなた専用 of クイズです！", ephemeral=True)
+                    await button_interaction.response.send_message("これはあなた専用のクイズです！", ephemeral=True)
                     return
                 self.value = "簡単"
                 self.stop()
@@ -59,7 +59,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
             @discord.ui.button(label="普通 (+50% / 全没収)", style=discord.ButtonStyle.primary)
             async def normal(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 if button_interaction.user.id != interaction.user.id:
-                    await button_interaction.response.send_message("これはあなた専用 of クイズです！", ephemeral=True)
+                    await button_interaction.response.send_message("これはあなた専用のクイズです！", ephemeral=True)
                     return
                 self.value = "普通"
                 self.stop()
@@ -68,7 +68,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
             @discord.ui.button(label="難しい (2倍 / 10%返還)", style=discord.ButtonStyle.danger)
             async def hard(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 if button_interaction.user.id != interaction.user.id:
-                    await button_interaction.response.send_message("これはあなた専用 of クイズです！", ephemeral=True)
+                    await button_interaction.response.send_message("これはあなた専用のクイズです！", ephemeral=True)
                     return
                 self.value = "難しい"
                 self.stop()
@@ -105,7 +105,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
 
             async def callback(self, select_interaction: discord.Interaction):
                 if select_interaction.user.id != interaction.user.id:
-                    await select_interaction.response.send_message("これはあなた専用 of クイズです！", ephemeral=True)
+                    await select_interaction.response.send_message("これはあなた専用のクイズです！", ephemeral=True)
                     return
                 self.view.selected_answer = self.values[0]
                 self.view.stop()
@@ -140,7 +140,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
                 log_entry = f"[{now_str}] ⏱️ -{loss} pt (クイズ未回答・難しい)"
                 
                 # sub.pyの関数でポイントとログを保存
-                update_user_data(user_id, new_points, log_entry)
+                sub.update_user_data(user_id, new_points, log_entry)
                 
                 await interaction.edit_original_response(
                     content=f"⏱️ **時間切れ！**\n{interaction.user.display_name}さんは時間内に回答できませんでした。\n"
@@ -151,7 +151,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
                 new_points = max(0, user_points - bet)
                 log_entry = f"[{now_str}] ⏱️ -{bet} pt (クイズ未回答・{difficulty})"
                 
-                update_user_data(user_id, new_points, log_entry)
+                sub.update_user_data(user_id, new_points, log_entry)
                 
                 await interaction.edit_original_response(
                     content=f"⏱️ **時間切れ！**\n{interaction.user.display_name}さんは時間内に回答できませんでした。\n"
@@ -174,7 +174,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
             new_points = user_points + reward
             log_entry = f"[{now_str}] 🎉 +{reward} pt (クイズ正解・{difficulty})"
             
-            update_user_data(user_id, new_points, log_entry)
+            sub.update_user_data(user_id, new_points, log_entry)
             
             await interaction.edit_original_response(
                 content=f"🎉 **正解です！！！**\n"
@@ -191,7 +191,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
                 new_points = max(0, user_points - loss)
                 log_entry = f"[{now_str}] ❌ -{loss} pt (クイズ不正解・難しい)"
                 
-                update_user_data(user_id, new_points, log_entry)
+                sub.update_user_data(user_id, new_points, log_entry)
                 
                 await interaction.edit_original_response(
                     content=f"❌ **不正解...！**\n"
@@ -205,7 +205,7 @@ def setup_quiz_command(tree: app_commands.CommandTree):
                 new_points = max(0, user_points - bet)
                 log_entry = f"[{now_str}] ❌ -{bet} pt (クイズ不正解・{difficulty})"
                 
-                update_user_data(user_id, new_points, log_entry)
+                sub.update_user_data(user_id, new_points, log_entry)
                 
                 await interaction.edit_original_response(
                     content=f"❌ **不正解...！**\n"
