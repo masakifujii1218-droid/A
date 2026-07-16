@@ -1,424 +1,449 @@
-import discord
-from discord import app_commands
+
+from datetime import datetime, timedelta
 import json
 import os
 import random
+import threading
+import time
 import asyncio
-import io
-from datetime import datetime
 
 # ==========================================
-# 🎰 循環インポート＆参照エラー完全回避システム
+# Flask (RenderやUptimeRobot等の死活監視用)
 # ==========================================
-# main.py や quiz.py が sub.quiz を呼ぼうとしてクラッシュするのを完全に防ぎます
-class DummyQuiz:
-    pass
+try:
+    from flask import Flask
+except ModuleNotFoundError:
+    class Flask:
+        def __init__(self, name):
+            self.name = name
+            self.routes = {}
 
-quiz = DummyQuiz()
+        def route(self, path):
+            def decorator(func):
+                self.routes[path] = func
+                return func
+            return decorator
+
+        def run(self, *args, **kwargs):
+            pass
+    print("警告: flask がインストールされていないため、ダミーを使用します。")
+
+app = Flask(__name__)
+
+@app.route("/")
+def health():
+    return "Bot is running"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    t = threading.Thread(target=run_flask, daemon=True)
+    t.start()
 
 # ==========================================
-# 設定エリア
+# Discord
 # ==========================================
-BACKUP_CHANNEL_ID = 1527164312634920980
+import discord
+from discord.ext import commands
+from discord import app_commands
 
-# 既存の設定
-INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID
-LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID
-WORK_ROLE_ID = 123456789012345678       # /work 実行可能ロールID
-ADMIN_ROLE_ID_POINTS = 123456789012345678 # 管理者ロールID（ポイント操作用）
-LOG_CHANNEL_ID_POINTS = 123456789012345678 # ポイントログチャンネルID
-
-# ファイルパス
-POINTS_FILE = "points.json"
-
-# グローバル変数
-points_cache = {}
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
-# データ管理・Discordバックアップコアシステム
+# JSON 永続化データ管理
 # ==========================================
+DATA_FILE = "trains.json"
+USAGE_FILE = "usage.json"
 
-async def load_points_from_discord(bot):
-    """起動時にDiscordのバックアップチャンネルから最新のJSONをロード"""
-    global points_cache
-    channel = bot.get_channel(BACKUP_CHANNEL_ID)
-    if not channel:
-        print(f"⚠️ [バックアップ] ID {BACKUP_CHANNEL_ID} のチャンネルが見つかりません。ローカルファイルを読み込みます。")
-        load_points_local()
-        return
+def load_trains():
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    print("🔄 [バックアップ] Discordのチャンネルから最新のポイントデータを探索中...")
-    found_backup = False
-    
-    async for message in channel.history(limit=50):
-        if message.attachments:
-            for attachment in message.attachments:
-                if attachment.filename == "points.json":
-                    try:
-                        file_bytes = await attachment.read()
-                        points_cache = json.loads(file_bytes.decode("utf-8"))
-                        
-                        with open(POINTS_FILE, "w", encoding="utf-8") as f:
-                            json.dump(points_cache, f, ensure_ascii=False, indent=4)
-                        
-                        print(f"✅ [バックアップ] Discordからデータを正常に復元しました！ (メッセージID: {message.id})")
-                        found_backup = True
-                        break
-                    except Exception as e:
-                        print(f"❌ [バックアップ] データの読み込みに失敗しました: {e}")
-            if found_backup:
-                break
+def save_trains(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-    if not found_backup:
-        print("ℹ️ [バックアップ] Discord上に有効なデータが見つかりませんでした。ローカルの読み込みを試みます。")
-        load_points_local()
-
-def load_points_local():
-    """ローカルファイルからデータをロード"""
-    global points_cache
-    if os.path.exists(POINTS_FILE):
-        try:
-            with open(POINTS_FILE, "r", encoding="utf-8") as f:
-                points_cache = json.load(f)
-                print("📁 [ローカル] points.json からデータを読み込みました。")
-        except Exception as e:
-            print(f"❌ [ローカル] 読み込み失敗、初期化します: {e}")
-            points_cache = {}
-    else:
-        points_cache = {}
-
-async def save_points_to_discord(bot):
-    """ローカル保存＆Discordバックアップチャンネルへの自動送信"""
-    global points_cache
+def load_usage_data():
+    if not os.path.exists(USAGE_FILE):
+        return {}
     try:
-        with open(POINTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(points_cache, f, ensure_ascii=False, indent=4)
-        
-        channel = bot.get_channel(BACKUP_CHANNEL_ID)
-        if channel:
-            with open(POINTS_FILE, "rb") as f:
-                discord_file = discord.File(f, filename="points.json")
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                await channel.send(
-                    content=f"📦 **ポイントデータベース自動同期**\n保存日時: `{now_str}`\nユーザー数: `{len(points_cache)}名`",
-                    file=discord_file
-                )
-            print("💾 [バックアップ] Discordへ最新データをアップロードしました！")
-        else:
-            print(f"⚠️ [バックアップ] 送信先チャンネル(ID: {BACKUP_CHANNEL_ID})が見つかりません。")
-    except Exception as e:
-        print(f"❌ [バックアップ] 保存・同期中にエラーが発生しました: {e}")
+        with open(USAGE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
-def get_user_data(user_id_str: str) -> dict:
-    """ユーザーデータを取得、存在しなければ新規作成"""
-    global points_cache
-    if user_id_str not in points_cache:
-        points_cache[user_id_str] = {
-            "points": 0,
-            "logs": []
-        }
-    if "points" not in points_cache[user_id_str]:
-        points_cache[user_id_str]["points"] = 0
-    if "logs" not in points_cache[user_id_str]:
-        points_cache[user_id_str]["logs"] = []
-    return points_cache[user_id_str]
-
-async def update_user_data_async(bot, user_id_str: str, new_points: int, log_entry: str = None):
-    """ユーザーデータを更新し、Discordへ非同期保存・同期"""
-    global points_cache
-    user_data = get_user_data(user_id_str)
-    user_data["points"] = new_points
-    if log_entry:
-        user_data["logs"].append(log_entry)
-        if len(user_data["logs"]) > 100:
-            user_data["logs"] = user_data["logs"][-100:]
-    
-    await save_points_to_discord(bot)
+def save_usage_data(data):
+    try:
+        with open(USAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except OSError:
+        pass
 
 # ==========================================
-# 外部接続用の初期設定関数 (メインファイルから呼ぶ用)
+# 権限・クールダウン設定
 # ==========================================
-async def setup_sub_system(bot):
-    """起動時にメインから呼び出し、自動同期を開始"""
-    await load_points_from_discord(bot)
+COMMAND_ROLE_ID = 1510405214811852900
+ADMIN_ROLE_ID = 1510021467167789104
+DEFAULT_ROUTE_NAME = "尾羽急本線"
 
-# 🛠️ メインの main.py から呼び出されるModmailコマンドの起動口
-def setup_admin_commands(bot: discord.Client):
-    """Modmail（sub.py）の運営側イベントとコマンドを完全に読み込みます"""
-    pass
+COMMAND_RULES = {
+    "create": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510021467155202057],
+        "window_sec": 12 * 3600,
+        "limit": 4
+    },
+    "create_emp": {
+        "unlimited_roles": [1510405214811852900],
+        "limited_roles": [1510021467167789097, 1511882841997185064],
+        "window_sec": 24 * 3600,
+        "limit": 5
+    },
+    "create_man": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510405214811852900],
+        "window_sec": 24 * 3600,
+        "limit": 4
+    },
+    "create_auto": {
+        "unlimited_roles": [1511882841997185064],
+        "limited_roles": [1510405214811852900],
+        "window_sec": 24 * 3600,
+        "limit": 4
+    }
+}
+
+def format_remaining_time(seconds):
+    if seconds <= 0:
+        return "0時間0分"
+    hours = seconds // 3600
+    minutes = (seconds % 3600 + 59) // 60
+    if minutes >= 60:
+        hours += 1
+        minutes -= 60
+    return f"{hours}時間{minutes}分"
+
+async def check_command_permission(interaction: discord.Interaction, command_name: str) -> bool:
+    rules = COMMAND_RULES.get(command_name)
+    if rules is None:
+        await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
+        return False
+
+    user_roles = [getattr(role, "id", None) for role in getattr(interaction.user, "roles", [])]
+    if ADMIN_ROLE_ID in user_roles:
+        return True
+    if any(role_id in rules["unlimited_roles"] for role_id in user_roles):
+        return True
+    if not any(role_id in rules["limited_roles"] for role_id in user_roles):
+        await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
+        return False
+
+    user_id = str(interaction.user.id)
+    now = int(time.time())
+    usage_data = load_usage_data()
+    user_usage = usage_data.setdefault(user_id, {})
+    timestamps = user_usage.setdefault(command_name, [])
+    window_start = now - rules["window_sec"]
+    timestamps = [ts for ts in timestamps if ts > window_start]
+
+    if len(timestamps) >= rules["limit"]:
+        earliest = min(timestamps)
+        remaining = earliest + rules["window_sec"] - now
+        await interaction.response.send_message(f"🚫 クールダウン中です。\n\nあと **{format_remaining_time(remaining)}** 後に利用できます。\n💡 `/quiz` に正解すると、制限をリセットできるチャンスがあります！", ephemeral=True)
+        user_usage[command_name] = timestamps
+        save_usage_data(usage_data)
+        return False
+
+    timestamps.append(now)
+    user_usage[command_name] = timestamps
+    usage_data[user_id] = user_usage
+    save_usage_data(usage_data)
+    return True
 
 # ==========================================
-# チケット管理Views
+# 鉄道データ (路線・駅・所要時間)
 # ==========================================
+ROUTE_STATIONS = {
+    "尾羽急本線": ["尾羽原", "井口", "梅郷", "雲中", "安越", "十川", "千峰", "南雲谷", "雲谷", "長峰", "西高徳", "高徳", "明神前", "舞子台", "紀田", "穂", "瀬舞", "余美", "千鳥"],
+    "空港線": ["尾羽原", "井口", "梅郷", "雲中", "安越", "十川", "千峰", "南雲谷", "雲谷", "長峰", "西高徳", "高徳", "新高徳", "整備場", "空港"],
+    "井問線": ["安越", "雲中", "梅郷", "井口", "上井口", "参田町", "東本郷", "本郷", "西問屋町", "問屋町", "千鳥"]
+}
 
-class StarRatingView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=None)
-        self.user_id = user_id
+STOP_TIME = 30
+TURNBACK_MINUTES = 5
+MIN_HEADWAY = 2
 
-class SupportClaimView(discord.ui.View):
-    def __init__(self, user_id: int, user_name: str):
-        super().__init__(timeout=None)
-        self.user_id = user_id
-        self.user_name = user_name
+LOCAL = {("尾羽原", "井口"): 60, ("井口", "梅郷"): 60, ("梅郷", "雲中"): 30, ("雲中", "安越"): 60, ("安越", "十川"): 60, ("十川", "千峰"): 90, ("千峰", "南雲谷"): 80, ("南雲谷", "雲谷"): 120, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "明神前"): 120, ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
+EXPRESS = {("尾羽原", "井口"): 85, ("井口", "安越"): 85, ("安越", "雲谷"): 180, ("雲谷", "高徳"): 140, ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120}
+SEMI_EXPRESS = {("尾羽原", "井口"): 90, ("井口", "雲中"): 120, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "雲谷"): 150, ("雲谷", "長峰"): 120, ("長峰", "高徳"): 150, ("高徳", "舞子台"): 180, ("舞子台", "紀田"): 120, ("紀田", "千鳥"): 180}
+RAPID = {("尾羽原", "井口"): 60, ("井口", "雲中"): 90, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "雲谷"): 180, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "明神前"): 120, ("明神前", "舞子台"): 100, ("舞子台", "紀田"): 100, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
+RAPID_EXPRESS = {("尾羽原", "高徳"): 410, ("高徳", "紀田"): 180, ("紀田", "千鳥"): 120}
+IDEMON_LOCAL = {("安越", "雲中"): 60, ("雲中", "梅郷"): 60, ("梅郷", "井口"): 60, ("井口", "上井口"): 90, ("上井口", "参田町"): 90, ("参田町", "東本郷"): 60, ("東本郷", "本郷"): 60, ("本郷", "西問屋町"): 80, ("西問屋町", "問屋町"): 110, ("問屋町", "千鳥"): 110}
+IDEMON_RAPID = {("安越", "雲中"): 60, ("雲中", "井口"): 90, ("井口", "参田町"): 150, ("参田町", "本郷"): 90, ("本郷", "問屋町"): 180, ("問屋町", "千鳥"): 110}
+IDEMON_EXPRESS = {("安越", "井口"): 120, ("井口", "本郷"): 240, ("本郷", "千鳥"): 240}
+SECTION_EXPRESS = {("尾羽原", "井口"): 90, ("井口", "安越"): 120, ("安越", "雲谷"): 210, ("雲谷", "高徳"): 180, ("高徳", "明神前"): 150, ("明神前", "舞子台"): 120, ("舞子台", "紀田"): 90, ("紀田", "穂"): 90, ("穂", "瀬舞"): 90, ("瀬舞", "余美"): 90, ("余美", "千鳥"): 90}
+
+ROUTE_TRAIN_TYPES = {
+    "尾羽急本線": {"普通": LOCAL, "準急": SEMI_EXPRESS, "区間急行": SECTION_EXPRESS, "快速": RAPID, "急行": EXPRESS, "快速急行": RAPID_EXPRESS},
+    "空港線": {
+        "普通": {("尾羽原", "井口"): 60, ("井口", "梅郷"): 60, ("梅郷", "雲中"): 30, ("雲中", "安越"): 60, ("安越", "十川"): 60, ("十川", "千峰"): 90, ("千峰", "南雲谷"): 80, ("南雲谷", "雲谷"): 120, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "新高徳"): 120, ("新高徳", "整備場"): 120, ("整備場", "空港"): 120},
+        "快速": {("尾羽原", "井口"): 60, ("井口", "雲中"): 90, ("雲中", "安越"): 60, ("安越", "千峰"): 120, ("千峰", "南雲谷"): 180, ("南雲谷", "雲谷"): 180, ("雲谷", "長峰"): 75, ("長峰", "西高徳"): 90, ("西高徳", "高徳"): 90, ("高徳", "新高徳"): 120, ("新高徳", "整備場"): 120, ("整備場", "空港"): 120},
+        "空港急行": {("尾羽原", "高徳"): 410, ("高徳", "新高徳"): 90, ("新高徳", "整備場"): 90, ("整備場", "空港"): 90}
+    },
+    "井問線": {"普通": IDEMON_LOCAL, "快速": IDEMON_RAPID, "急行": IDEMON_EXPRESS}
+}
 
 # ==========================================
-# スラッシュコマンド（チケット＆ポイント統合）
+# クイズデータ (尾羽急鉄道クイズ)
 # ==========================================
+QUIZ_LIST = [
+    {
+        "question": "尾羽急本線の「快速急行」が、尾羽原を出発した後に最初に停車する駅はどこ？",
+        "choices": ["井口", "安越", "高徳", "千峰"],
+        "answer": "高徳"
+    },
+    {
+        "question": "空港線の終着駅はどこ？",
+        "choices": ["空港", "新高徳", "整備場", "千鳥"],
+        "answer": "空港"
+    },
+    {
+        "question": "井問線の「普通」列車で、安越から雲中までの所要時間は何秒？",
+        "choices": ["30秒", "60秒", "90秒", "120秒"],
+        "answer": "60秒"
+    },
+    {
+        "question": "尾羽急本線において、区間急行が停車しない駅は次のうちどれ？",
+        "choices": ["南雲谷", "舞子台", "千鳥", "紀田"],
+        "answer": "南雲谷"
+    }
+]
 
-def setup_slash_commands(bot: discord.Client):
-    """メイン側からすべてのコマンドを登録"""
+# ==========================================
+# ダイヤ計算ロジック
+# ==========================================
+def get_stops(route_name, train_type):
+    data = ROUTE_TRAIN_TYPES[route_name][train_type]
+    stations = set()
+    for a, b in data.keys():
+        stations.add(a)
+        stations.add(b)
+    return stations
 
-    # --- /close_ticket コマンド ---
-    @bot.tree.command(name="close_ticket", description="【運営専用】この問い合わせチケットをクローズします")
-    async def close_ticket_command(interaction: discord.Interaction):
-        channel = interaction.channel
-        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
-            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
-            return
+def calculate_times(route_name, train_type, start_station, end_station, start_time_str):
+    if route_name not in ROUTE_STATIONS:
+        return None, "未実装の路線です"
+    if train_type not in ROUTE_TRAIN_TYPES[route_name]:
+        return None, "その種別はありません"
 
-        await interaction.response.defer()
+    stations = ROUTE_STATIONS[route_name]
+    if start_station not in stations: 
+        return None, "開始駅が存在しません"
+    if end_station not in stations: 
+        return None, "終了駅が存在しません"
 
-        user = None
-        if channel.topic and "User ID:" in channel.topic:
-            try:
-                parts = channel.topic.split("|")
-                u_id = int(parts[0].replace("User ID:", "").strip())
-                user = await interaction.client.fetch_user(u_id)
-            except:
-                pass
+    stops = get_stops(route_name, train_type)
+    if start_station not in stops: 
+        return None, "開始駅は停車駅ではありません"
+    if end_station not in stops: 
+        return None, "終了駅は停車駅ではありません"
 
-        log_lines = []
-        async for msg in channel.history(limit=100, oldest_first=True):
-            if msg.embeds:
-                for emb in msg.embeds:
-                    author_name = emb.author.name if emb.author else "システム"
-                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
-            elif msg.content:
-                log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+    try:
+        base_time = datetime.strptime(start_time_str, "%H:%M")
+    except ValueError:
+        return None, "時刻の形式が不正です (HH:MM で指定してください)"
 
-        full_log_text = "\n".join(log_lines)
+    start_idx = stations.index(start_station)
+    end_idx = stations.index(end_station)
+    is_down = start_idx < end_idx
 
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title=f"🔒 チケットクローズログ: {channel.name}",
-                description=f"**対象ユーザー:** {user.mention if user else channel.name}\n**クローズ実行者:** {interaction.user.mention} (強制クローズ)",
-                color=discord.Color.red(), timestamp=datetime.now()
-            )
-            if len(full_log_text) > 3000 or len(full_log_text) == 0:
-                with io.StringIO(full_log_text) as f:
-                    file = discord.File(f, filename=f"log-{channel.name}.txt")
-                    await log_channel.send(embed=log_embed, file=file)
-            else:
-                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
-                await log_channel.send(embed=log_embed)
+    current_idx = start_idx
+    current_time = base_time
+    timetable = []
 
-        if user:
-            try:
-                end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
-                await user.send(end_embed)
+    timetable.append({
+        "station": start_station,
+        "arr": "--:--",
+        "dep": current_time.strftime("%H:%M")
+    })
 
-                rating_embed = discord.Embed(
-                    title="📝 問い合わせ評価のお願い",
-                    description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
-                    color=discord.Color.gold()
-                )
-                rating_view = StarRatingView(user_id=user.id)
-                await user.send(embed=rating_embed, view=rating_view)
-            except:
-                pass
+    route_data = ROUTE_TRAIN_TYPES[route_name][train_type]
 
-        await asyncio.sleep(2)
-        await channel.delete()
+    while current_idx != end_idx:
+        next_idx = current_idx + 1 if is_down else current_idx - 1
+        curr_st = stations[current_idx]
+        next_st = stations[next_idx]
 
-    # --- /change_staff コマンド ---
-    @bot.tree.command(name="change_staff", description="チケットの担当スタッフをリセットして交代します")
-    async def change_staff_command(interaction: discord.Interaction):
-        channel = interaction.channel
-        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
-            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
-            return
-        if not channel.topic or "User ID:" not in channel.topic:
-            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
-            return
-
-        try:
-            parts = channel.topic.split("|")
-            u_id = int(parts[0].replace("User ID:", "").strip())
-            user = await interaction.client.fetch_user(u_id)
-        except:
-            await interaction.response.send_message("❌ ユーザー情報の解析に失敗しました。", ephemeral=True)
-            return
-
-        await channel.edit(name=f"{user.name.lower()}", topic=f"User ID: {user.id}")
-        new_view = SupportClaimView(user_id=user.id, user_name=user.name)
-        reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
-        await interaction.response.send_message(embed=reset_embed, view=new_view)
-
-
-    # --- /work コマンド ---
-    @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
-    @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
-    async def work_command(interaction: discord.Interaction):
-        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-
-        await interaction.response.defer(ephemeral=False)
-
-        if random.random() < 0.70:
-            earned = random.randint(200, 300)
-        else:
-            earned = random.choice([random.randint(50, 199), random.randint(301, 400)])
-
-        user_id_str = str(interaction.user.id)
-        user_data = get_user_data(user_id_str)
-        new_points = user_data["points"] + earned
-        
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"[{now_str}] 🪙 +{earned} pt (お仕事報酬)"
-        
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
-
-        embed = discord.Embed(
-            title="💼 お仕事完了！",
-            description=f"{interaction.user.mention}さんが仕事を完了しました。\n\n獲得: **{earned}** ポイント 🪙",
-            color=discord.Color.green(),
-            timestamp=datetime.now()
-        )
-        embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
-        await interaction.followup.send(embed=embed)
-
-    @work_command.error
-    async def work_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-        if isinstance(error, app_commands.CommandOnCooldown):
-            total_seconds = int(error.retry_after)
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            time_str = f"**{hours}時間** " if hours > 0 else ""
-            time_str += f"**{minutes}分**"
+        section = (curr_st, next_st) if is_down else (next_st, curr_st)
+        if section in route_data:
+            travel_time_sec = route_data[section]
+            current_time += timedelta(seconds=travel_time_sec)
             
+            if next_st in stops:
+                arr_time = current_time
+                if next_idx == end_idx:
+                    timetable.append({
+                        "station": next_st,
+                        "arr": arr_time.strftime("%H:%M"),
+                        "dep": "--:--"
+                    })
+                else:
+                    dep_time = arr_time + timedelta(seconds=STOP_TIME)
+                    timetable.append({
+                        "station": next_st,
+                        "arr": arr_time.strftime("%H:%M"),
+                        "dep": dep_time.strftime("%H:%M")
+                    })
+                    current_time = dep_time
+        
+        current_idx = next_idx
+
+    return timetable, None
+
+# ==========================================
+# クイズ UI (インタラクティブボタン)
+# ==========================================
+class QuizView(discord.ui.View):
+    def __init__(self, quiz_data, user_id):
+        super().__init__(timeout=60.0)
+        self.quiz_data = quiz_data
+        self.user_id = user_id
+
+        # 4つの選択肢に対応するボタンを動的に配置
+        for choice in self.quiz_data["choices"]:
+            button = discord.ui.Button(label=choice, style=discord.ButtonStyle.primary, custom_id=choice)
+            button.callback = self.on_button_click
+            self.add_item(button)
+
+    async def on_button_click(self, interaction: discord.Interaction):
+        # 回答者本人以外の入力を無視
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("これはあなたのクイズではありません！", ephemeral=True)
+            return
+
+        selected_answer = interaction.data["custom_id"]
+        correct_answer = self.quiz_data["answer"]
+
+        # 全てのボタンを無効化
+        for item in self.children:
+            item.disabled = True
+
+        if selected_answer == correct_answer:
+            # 【クールダウンリセット連携】
+            usage_data = load_usage_data()
+            user_id_str = str(interaction.user.id)
+            if user_id_str in usage_data:
+                # create コマンドの履歴（クールダウン）を完全にリセット
+                if "create" in usage_data[user_id_str]:
+                    usage_data[user_id_str]["create"] = []
+                save_usage_data(usage_data)
+                benefit_text = "\n🎉 **ご褒美:** `/create` のクールダウン制限が完全にリセットされました！今すぐ作成可能です！"
+            else:
+                benefit_text = "\n🎉 **ご褒美:** クールダウンは元々ありませんが、これでいつでも作成可能です！"
+
             embed = discord.Embed(
-                title="⏳ まだお仕事はできません",
-                description=f"お仕事のやりすぎです！次のお仕事まであと {time_str} お待ちください。",
+                title="🟢 正解！",
+                description=f"お見事！正解は **{correct_answer}** です！{benefit_text}",
+                color=discord.Color.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="🔴 不正解...",
+                description=f"残念！正解は **{correct_answer}** でした。また次回挑戦してください！",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- /points コマンド ---
-    @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
-    async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        target_user = ユーザー or interaction.user
-        user_data = get_user_data(str(target_user.id))
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
 
-        embed = discord.Embed(
-            title="🪙 ポイント確認",
-            description=f"{target_user.mention} さんの現在の残高です。",
-            color=discord.Color.gold(),
-            timestamp=datetime.now()
-        )
-        embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+# ==========================================
+# スラッシュコマンドの実装 (/create & /quiz)
+# ==========================================
+@bot.tree.command(name="create", description="新しいダイヤを作成し、各駅の時刻表を出力します。")
+@app_commands.describe(
+    路線="ダイヤを作成する路線名",
+    種別="列車の種別（普通、快速、急行など）",
+    始発駅="列車の出発駅",
+    終着駅="列車の終点駅",
+    始発時刻="出発時刻 (例: 12:00)"
+)
+async def create_dia_command(
+    interaction: discord.Interaction,
+    路線: str,
+    種別: str,
+    始発駅: str,
+    終着駅: str,
+    始発時刻: str
+):
+    if not await check_command_permission(interaction, "create"):
+        return
 
-    # --- /pointlog コマンド ---
-    @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
-    async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        target_user = ユーザー or interaction.user
-        user_data = get_user_data(str(target_user.id))
+    timetable, error = calculate_times(路線, 種別, 始発駅, 終着駅, 始発時刻)
+    if error:
+        await interaction.response.send_message(f"❌ エラー: {error}", ephemeral=True)
+        return
 
-        embed = discord.Embed(
-            title="📜 ポイント利用明細（通帳）",
-            description=f"{target_user.mention} さんの過去の履歴です。",
-            color=discord.Color.blue(),
-            timestamp=datetime.now()
-        )
+    embed = discord.Embed(
+        title=f"🚆 ダイヤ作成結果 ({種別})",
+        description=f"**路線:** {路線}\n**運行区間:** {始発駅} ➡ {終着駅}",
+        color=discord.Color.green()
+    )
 
-        logs = user_data.get("logs", [])
-        if not logs:
-            embed.description += "\n\n*履歴はまだありません。*"
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
+    schedule_text = ""
+    for stop in timetable:
+        schedule_text += f"**{stop['station']}駅** - 着 {stop['arr']} / 発 {stop['dep']}\n"
 
-        recent_logs = list(reversed(logs))[:100]
-        full_log_text = "\n".join(recent_logs)
+    embed.add_field(name="時刻表", value=schedule_text, inline=False)
+    
+    train_data = load_trains()
+    train_id = f"TRN-{random.randint(1000, 9999)}"
+    train_data[train_id] = {
+        "route": 路線,
+        "type": 種別,
+        "timetable": timetable,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_trains(train_data)
 
-        if len(full_log_text) > 850:
-            embed.description += "\n\n📋 履歴数が多いため、テキストファイルを作成して添付しました。"
-            with io.StringIO(full_log_text) as f:
-                file = discord.File(f, filename=f"passbook-{target_user.name}.txt")
-                await interaction.response.send_message(embed=embed, file=file, ephemeral=False)
-        else:
-            embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
-            await interaction.response.send_message(embed=embed, ephemeral=False)
+    embed.set_footer(text=f"管理ID: {train_id} | 設定者: {interaction.user.name}")
+    await interaction.response.send_message(embed=embed)
 
-    # --- /give_points コマンド ---
-    @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
-    async def give_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
+@bot.tree.command(name="quiz", description="尾羽急に関する鉄道クイズを出題します！正解するとダイヤ作成制限がリセットされます。")
+async def quiz_command(interaction: discord.Interaction):
+    quiz = random.choice(QUIZ_LIST)
+    
+    embed = discord.Embed(
+        title="❓ 尾羽急 鉄道クイズ！",
+        description=f"**問題:**\n{quiz['question']}\n\n下のボタンから正解を選択してください！",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="※制限時間 60秒 | 正解すると /create のクールダウンがリセットされます！")
 
-        await interaction.response.defer(ephemeral=False)
+    view = QuizView(quiz_data=quiz, user_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
 
-        user_id_str = str(ユーザー.id)
-        user_data = get_user_data(user_id_str)
-        new_points = user_data["points"] + ポイント数
-        
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})"
-        
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
+# ==========================================
+# 起動処理
+# ==========================================
+@bot.event
+async def on_ready():
+    print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        print(f"{len(synced)} 個のコマンドを同期しました。")
+    except Exception as e:
+        print(f"同期エラー: {e}")
 
-        res_embed = discord.Embed(
-            title="✅ ポイント付与完了",
-            description=f"{ユーザー.mention} に **{ポイント数}** ポイントを付与しました。\n理由: {理由}",
-            color=discord.Color.green()
-        )
-        await interaction.followup.send(res_embed)
-
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
-        if log_channel:
-            noti_embed = discord.Embed(title="📥 ポイント変動通知 (付与)", color=discord.Color.green(), timestamp=datetime.now())
-            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
-            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
-            noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
-            noti_embed.add_field(name="理由", value=理由, inline=False)
-            await log_channel.send(noti_embed)
-
-    # --- /take_points コマンド ---
-    @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
-    async def take_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
-            return
-
-        await interaction.response.defer(ephemeral=False)
-
-        user_id_str = str(ユーザー.id)
-        user_data = get_user_data(user_id_str)
-        new_points = user_data["points"] - ポイント数
-        
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})"
-        
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
-
-        res_embed = discord.Embed(
-            title="⚠️ ポイント消費",
-            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費しました。\n目的・理由: {理由}",
-            color=discord.Color.orange()
-        )
-        await interaction.followup.send(res_embed)
-
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
-        if log_channel:
-            noti_embed = discord.Embed(title="📤 ポイント変動通知 (消費)", color=discord.Color.red(), timestamp=datetime.now())
-            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
-            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
-            noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
-            noti_embed.add_field(name="使用用途（理由）", value=理由, inline=False)
-            await log_channel.send(noti_embed)
+if __name__ == "__main__":
+    keep_alive()
+    
+    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
