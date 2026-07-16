@@ -7,12 +7,18 @@ import asyncio
 import io
 from datetime import datetime
 
+# 🎰 クイズ機能（quiz.py）を安全に、普通にインポートします
+try:
+    import quiz
+except ImportError:
+    quiz = None
+
 # ==========================================
 # 設定エリア
 # ==========================================
 BACKUP_CHANNEL_ID = 1527164312634920980
 
-# 既存の設定（必要に応じて元のIDに書き換えてください）
+# 既存の設定
 INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID
 LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID
 WORK_ROLE_ID = 123456789012345678       # /work 実行可能ロールID
@@ -38,7 +44,7 @@ async def load_points_from_discord(bot):
         load_points_local()
         return
 
-    print("🔄 [バックアップ] Discord of チャンネルから最新のポイントデータを探索中...")
+    print("🔄 [バックアップ] Discordのチャンネルから最新のポイントデータを探索中...")
     found_backup = False
     
     async for message in channel.history(limit=50):
@@ -133,26 +139,10 @@ async def setup_sub_system(bot):
     """起動時にメインから呼び出し、自動同期を開始"""
     await load_points_from_discord(bot)
 
-# 🛠️ メインファイルの main.py から呼び出されるModmailコマンドの起動口
+# 🛠️ メインの main.py から呼び出されるModmailコマンドの起動口
 def setup_admin_commands(bot: discord.Client):
     """Modmail（sub.py）の運営側イベントとコマンドを完全に読み込みます"""
     pass
-
-# 🎰 main.pyの「sub.quiz」という呼び出しエラーを防ぐためのプロパティ設定
-class QuizFallback:
-    @property
-    def quiz(self):
-        try:
-            import quiz
-            return quiz
-        except ImportError:
-            return None
-
-# これにより、main.py 側で `sub.quiz` と書かれたときに、その場で安全に quiz.py をインポートします。
-import sys
-sys.modules[__name__].__class__ = type('CustomModule', (sys.modules[__name__].__class__,), {
-    'quiz': property(lambda self: __import__('quiz') if 'quiz' not in sys.modules else sys.modules['quiz'])
-})
 
 # ==========================================
 # チケット管理Views
@@ -428,4 +418,4 @@ def setup_slash_commands(bot: discord.Client):
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
             noti_embed.add_field(name="使用用途（理由）", value=理由, inline=False)
-            await log_channel.send(embed=noti_embed)
+            await log_channel.send(noti_embed)
