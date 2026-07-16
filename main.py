@@ -841,6 +841,14 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"sub.py の読み込み中にエラーが発生しました: {e}")
 
+    # 🎰 クイズ機能（quiz.py）のコマンド登録
+    try:
+        # sub.py の上で import quiz されているため、sub.quiz から呼び出します
+        sub.quiz.setup_quiz_command(bot.tree)
+        print("鉄道クイズ（quiz.py）のコマンドを正常に読み込みました！")
+    except Exception as e:
+        print(f"quiz.py の読み込み中にエラーが発生しました: {e}")
+        
     # Discord Botの起動
     if TOKEN:
         bot.run(TOKEN)
