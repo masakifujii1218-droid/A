@@ -8,17 +8,21 @@ import io
 from datetime import datetime
 
 # ==========================================
-# 設定エリア
+# 設定エリア（IDを設定しました！）
 # ==========================================
-# 👑 バックアップ専用チャンネルのIDを設定しました！
+# 👑 バックアップ専用チャンネルID
 BACKUP_CHANNEL_ID = 1527164312634920980
 
-# 既存の設定（必要に応じて元のIDに書き換えてください）
-INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID
-LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID
-WORK_ROLE_ID = 123456789012345678       # /work 実行可能ロールID
-ADMIN_ROLE_ID_POINTS = 123456789012345678 # 管理者ロールID（ポイント操作用）
-LOG_CHANNEL_ID_POINTS = 123456789012345678 # ポイントログチャンネルID
+# 📢 ポイントログ送信先チャンネルID
+LOG_CHANNEL_ID_POINTS = 1526289865719943329
+
+# 既存の設定
+INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID（必要に応じて変更してください）
+LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID（必要に応じて変更してください）
+
+# 🎯 権限ロールID
+WORK_ROLE_ID = 1510021467155202057          # /work, /points, /pointlog を実行できるロールID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900  # 管理者（ポイント付与・消費操作ができる）ロールID
 
 # ファイルパス
 POINTS_FILE = "points.json"
@@ -151,7 +155,6 @@ class StarRatingView(discord.ui.View):
     def __init__(self, user_id: int):
         super().__init__(timeout=None)
         self.user_id = user_id
-        # 必要に応じて元の評価ボタンのインタラクション処理をここに記述してください。
         pass
 
 class SupportClaimView(discord.ui.View):
@@ -159,7 +162,6 @@ class SupportClaimView(discord.ui.View):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.user_name = user_name
-        # 必要に応じて元の担当ボタンのインタラクション処理をここに記述してください。
         pass
 
 # ==========================================
@@ -169,7 +171,7 @@ class SupportClaimView(discord.ui.View):
 def setup_slash_commands(bot: discord.Client):
     """メイン側からすべてのコマンドを登録します"""
 
-    # --- /close_ticket コマンド (元コードの移植) ---
+    # --- /close_ticket コマンド ---
     @bot.tree.command(name="close_ticket", description="【運営専用】この問い合わせチケットをクローズします")
     async def close_ticket_command(interaction: discord.Interaction):
         channel = interaction.channel
@@ -234,7 +236,7 @@ def setup_slash_commands(bot: discord.Client):
         await asyncio.sleep(2)
         await channel.delete()
 
-    # --- /change_staff コマンド (元コードの移植) ---
+    # --- /change_staff コマンド ---
     @bot.tree.command(name="change_staff", description="チケットの担当スタッフをリセットして交代します")
     async def change_staff_command(interaction: discord.Interaction):
         channel = interaction.channel
@@ -259,13 +261,14 @@ def setup_slash_commands(bot: discord.Client):
         await interaction.response.send_message(embed=reset_embed, view=new_view)
 
 
-    # --- /work コマンド (非同期Discord同期対応) ---
+    # --- /work コマンド (権限ロール確認付き) ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
     @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
     async def work_command(interaction: discord.Interaction):
+        # メンバー用のロールIDを持っているかチェック
         if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=False)
@@ -309,9 +312,15 @@ def setup_slash_commands(bot: discord.Client):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- /points コマンド ---
+    # --- /points コマンド (メンバー用ロールが必要) ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
     async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
+        # メンバー用のロールIDを持っているかチェック
+        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
         target_user = ユーザー or interaction.user
         user_data = get_user_data(str(target_user.id))
 
@@ -324,9 +333,15 @@ def setup_slash_commands(bot: discord.Client):
         embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /pointlog コマンド ---
+    # --- /pointlog コマンド (メンバー用ロールが必要) ---
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
+        # メンバー用のロールIDを持っているかチェック
+        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
+            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
         target_user = ユーザー or interaction.user
         user_data = get_user_data(str(target_user.id))
 
@@ -355,12 +370,12 @@ def setup_slash_commands(bot: discord.Client):
             embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /give_points コマンド (非同期Discord同期対応) ---
+    # --- /give_points コマンド (管理者用ロールが必要) ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
     async def give_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=False)
@@ -390,12 +405,12 @@ def setup_slash_commands(bot: discord.Client):
             noti_embed.add_field(name="理由", value=理由, inline=False)
             await log_channel.send(embed=noti_embed)
 
-    # --- /take_points コマンド (非同期Discord同期対応) ---
+    # --- /take_points コマンド (管理者用ロールが必要) ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
     async def take_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=False)
