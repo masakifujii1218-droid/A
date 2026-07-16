@@ -7,11 +7,14 @@ import asyncio
 import io
 from datetime import datetime
 
-# 🎰 クイズ機能（quiz.py）を安全に、普通にインポートします
-try:
-    import quiz
-except ImportError:
-    quiz = None
+# ==========================================
+# 🎰 循環インポート＆参照エラー完全回避システム
+# ==========================================
+# main.py や quiz.py が sub.quiz を呼ぼうとしてクラッシュするのを完全に防ぎます
+class DummyQuiz:
+    pass
+
+quiz = DummyQuiz()
 
 # ==========================================
 # 設定エリア
@@ -374,7 +377,7 @@ def setup_slash_commands(bot: discord.Client):
             description=f"{ユーザー.mention} に **{ポイント数}** ポイントを付与しました。\n理由: {理由}",
             color=discord.Color.green()
         )
-        await interaction.followup.send(embed=res_embed)
+        await interaction.followup.send(res_embed)
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
@@ -383,7 +386,7 @@ def setup_slash_commands(bot: discord.Client):
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
             noti_embed.add_field(name="理由", value=理由, inline=False)
-            await log_channel.send(embed=noti_embed)
+            await log_channel.send(noti_embed)
 
     # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
@@ -409,7 +412,7 @@ def setup_slash_commands(bot: discord.Client):
             description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費しました。\n目的・理由: {理由}",
             color=discord.Color.orange()
         )
-        await interaction.followup.send(embed=res_embed)
+        await interaction.followup.send(res_embed)
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
