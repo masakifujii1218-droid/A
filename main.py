@@ -818,6 +818,33 @@ async def on_ready():
         auto_backup_loop.start()
         print("【Render対策】1時間ごとの自動同期ループを開始しました。")
 
+# --- 👑 on_ready イベント内にバックアップ復旧とコマンド登録を追加します ---
+@bot.event
+async def on_ready():
+    print(f"Bot logged in as {bot.user}")
+    
+    # 📦 [追加] 起動時にDiscordのバックアップチャンネルからデータを自動復元
+    try:
+        import sub
+        await sub.setup_sub_system(bot)
+    except Exception as e:
+        print(f"警告: 起動時のDiscordデータ復元に失敗しました: {e}")
+        
+    # 🪙 [追加] sub.py に定義されたポイントシステム関連のコマンドを登録
+    try:
+        sub.setup_slash_commands(bot)
+        print("ポイントシステム関連のコマンドを読み込みました！")
+    except Exception as e:
+        print(f"警告: ポイントコマンドの登録に失敗しました: {e}")
+    
+    # スラッシュコマンドの同期処理
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands.")
+    except Exception as e:
+        print(f"コマンドの同期中にエラーが発生しました: {e}")
+
+
 def start_web_server():
     port = int(os.environ.get("PORT", "5000"))
     print(f"Starting Flask on port {port}")
