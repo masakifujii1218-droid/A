@@ -17,10 +17,11 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v7.1.2 (Modmail + Point System)"
+VERSION = "v7.2.1 (Point Database Sync)"
 
 # --- ポイントシステム用設定 ---
-LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
+# 💡 指定していただいたデータベース用チャンネルIDを設定しました！
+POINT_DATABASE_CHANNEL_ID = 1527164312634920980  
 WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
 ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
 
@@ -30,22 +31,87 @@ POINTS_FILE = os.path.join(BASE_DIR, "points.json")
 points_data = {}
 
 # ==========================================
-# ポイントデータ管理関数（リアルタイム保存のみ）
+# 💎 Discordチャンネルからポイントを自動復元・同期する関数
+# ==========================================
+async def sync_points_from_discord(bot: commands.Bot):
+    global points_data
+    print("【データベース】Discordのチャンネルからポイントデータの同期を開始します...")
+    
+    channel = bot.get_channel(POINT_DATABASE_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(POINT_DATABASE_CHANNEL_ID)
+        except Exception as e:
+            print(f"【エラー】同期対象のチャンネルが見つかりません: {e}")
+            return
+
+    # 一時的にデータをリセットして、古い順からログを追体験して再構築する
+    temp_data = {}
+    count = 0
+
+    # 過去のメッセージを古い順（oldest_first=True）に取得して解析
+    async for message in channel.history(limit=5000, oldest_first=True):
+        # Bot自身の埋め込みメッセージのみを対象とする
+        if message.author.id != bot.user.id or not message.embeds:
+            continue
+        
+        embed = message.embeds[0]
+        # 変動通知（付与、消費、仕事など）を解析
+        if embed.title and "ポイント変動通知" in embed.title:
+            target_field = None
+            change_field = None
+            reason_field = "システムによる操作"
+
+            for field in embed.fields:
+                if field.name == "対象者ID":
+                    target_field = field.value
+                elif field.name == "変動値":
+                    change_field = field.value
+                elif field.name in ["理由", "使用用途（理由）"]:
+                    reason_field = field.value
+
+            if target_field and change_field:
+                # ユーザーIDをクリーン（メンションや文字列から数字のみ抽出）
+                user_id_str = "".join(filter(str.isdigit, target_field))
+                try:
+                    change_amount = int(change_field.replace(" pt", "").replace("+", "").replace(" ", ""))
+                except ValueError:
+                    continue
+
+                if user_id_str not in temp_data:
+                    temp_data[user_id_str] = {"points": 0, "logs": []}
+
+                # ポイントを合算・計算
+                temp_data[user_id_str]["points"] += change_amount
+                
+                # 履歴用ログを復元
+                time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
+                sign = "+" if change_amount >= 0 else ""
+                emoji = "🪙" if change_amount >= 0 else "💸"
+                log_entry = f"[{time_str}] {emoji} {sign}{change_amount} pt ({reason_field})"
+                temp_data[user_id_str]["logs"].append(log_entry)
+                
+                count += 1
+
+    points_data = temp_data
+    save_points()
+    print(f"【データベース】同期完了！計 {count} 件のログから {len(points_data)} 人分のデータを復元しました。")
+
+
+# ==========================================
+# ポイントデータ管理関数（ファイル保存）
 # ==========================================
 def load_points():
     global points_data
-    
     if os.path.exists(POINTS_FILE):
         try:
             with open(POINTS_FILE, "r", encoding="utf-8") as f:
                 points_data = json.load(f)
-                print("【システム】ポイントデータを読み込みました。")
+                print("【システム】ローカルのポイントデータを読み込みました。")
                 return
         except Exception as e:
             print(f"データ読み込み失敗: {e}")
-
     points_data = {}
-    print("【システム】新規ポイントデータを作成しました。")
 
 def save_points():
     try:
@@ -325,10 +391,12 @@ def setup_modmail_events(bot: commands.Bot):
 # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
-# メイン側から呼び出されるsetup関数名を main.py の「setup_slash_commands」に修正
 def setup_slash_commands(bot: commands.Bot):
-    # 初期起動時にポイントデータを読み込む
+    # 最初はローカルを読み込む
     load_points()
+    
+    # 💡 非同期でDiscordチャンネルからデータを完全に同期（再起動対策）
+    asyncio.create_task(sync_points_from_discord(bot))
     
     # メッセージイベントを設定
     setup_modmail_events(bot)
@@ -491,6 +559,16 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
+        # 💡 同期用のポイントデータベースチャンネルに必ず解析可能なログを送る
+        log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
+        if log_channel:
+            noti_embed = discord.Embed(title="📥 ポイント変動通知 (お仕事)", color=discord.Color.green(), timestamp=datetime.now())
+            noti_embed.add_field(name="対象者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="対象者ID", value=f"`{interaction.user.id}`", inline=True)
+            noti_embed.add_field(name="変動値", value=f"+{earned} pt", inline=True)
+            noti_embed.add_field(name="理由", value="お仕事報酬", inline=False)
+            await log_channel.send(embed=noti_embed)
+
     @work_command.error
     async def work_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CommandOnCooldown):
@@ -580,14 +658,14 @@ def setup_slash_commands(bot: commands.Bot):
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
 
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
+        log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
         if log_channel:
             noti_embed = discord.Embed(title="📥 ポイント変動通知 (付与)", color=discord.Color.green(), timestamp=datetime.now())
             noti_embed.add_field(name="対象者", value=user.mention, inline=True)
-            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="対象者ID", value=f"`{user.id}`", inline=True)
             noti_embed.add_field(name="変動値", value=f"+{amount} pt", inline=True)
             noti_embed.add_field(name="理由", value=reason, inline=False)
-            await log_channel.send(noti_embed)
+            await log_channel.send(embed=noti_embed)
 
     # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
@@ -614,11 +692,11 @@ def setup_slash_commands(bot: commands.Bot):
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
 
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
+        log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
         if log_channel:
             noti_embed = discord.Embed(title="📤 ポイント変動通知 (消費)", color=discord.Color.red(), timestamp=datetime.now())
             noti_embed.add_field(name="対象者", value=user.mention, inline=True)
-            noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="対象者ID", value=f"`{user.id}`", inline=True)
             noti_embed.add_field(name="変動値", value=f"-{amount} pt", inline=True)
             noti_embed.add_field(name="使用用途（理由）", value=reason, inline=False)
-            await log_channel.send(noti_embed)
+            await log_channel.send(embed=noti_embed)
