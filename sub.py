@@ -17,7 +17,7 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v7.1.1 (Modmail + Point System)"
+VERSION = "v7.1.2 (Modmail + Point System)"
 
 # --- ポイントシステム用設定 ---
 LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
@@ -325,7 +325,12 @@ def setup_modmail_events(bot: commands.Bot):
 # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
-def setup_admin_commands(bot: commands.Bot):
+# メイン側から呼び出されるsetup関数名を main.py の「setup_slash_commands」に修正
+def setup_slash_commands(bot: commands.Bot):
+    # 初期起動時にポイントデータを読み込む
+    load_points()
+    
+    # メッセージイベントを設定
     setup_modmail_events(bot)
 
     # --- /closereq コマンド ---
