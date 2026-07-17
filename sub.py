@@ -1,337 +1,386 @@
+# ==========================================
+# sub.py (Modmailシステム + ポイントシステム)
+# ==========================================
 import discord
+from discord.ext import commands  # 不要な tasks のインポートを削除
 from discord import app_commands
-import json
+import asyncio
+from datetime import datetime
+import io
 import os
 import random
-import asyncio
-import io
-from datetime import datetime
+import json
+
+# --- 固定設定 ---
+INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
+LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
+RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
+ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
+
+VERSION = "v7.1.0 (Modmail + Point System)"
+
+# --- ポイントシステム用設定 ---
+LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
+WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POINTS_FILE = os.path.join(BASE_DIR, "points.json")
+
+points_data = {}
 
 # ==========================================
-# 設定エリア（ご指定のIDを設定しました！）
+# ポイントデータ管理関数（リアルタイム保存のみ）
 # ==========================================
-# 👑 バックアップ専用チャンネルID
-BACKUP_CHANNEL_ID = 1527164312634920980
-
-# 📢 ポイントログ送信先チャンネルID
-LOG_CHANNEL_ID_POINTS = 1526289865719943329
-
-# 既存の設定
-INBOX_CATEGORY_ID = 123456789012345678  # 問い合わせカテゴリID（必要に応じて変更してください）
-LOG_CHANNEL_ID = 123456789012345678     # チケットログチャンネルID（必要に応じて変更してください）
-
-# 🎯 権限ロールID
-WORK_ROLE_ID = 1510021467155202057          # /work, /points, /pointlog を実行できるロールID
-ADMIN_ROLE_ID_POINTS = 1510405214811852900  # 管理者（ポイント付与・消費操作ができる）ロールID
-
-# ファイルパス
-POINTS_FILE = "points.json"
-
-# グローバル変数（インメモリバッファ）
-points_cache = {}
-
-# ==========================================
-# データ管理・Discordバックアップコアシステム
-# ==========================================
-
-async def load_points_from_discord(bot):
-    """
-    起動時にDiscordのバックアップチャンネルから最新のJSONファイルをダウンロードし、
-    ローカルの points.json を自動復元・同期します。
-    """
-    global points_cache
-    channel = bot.get_channel(BACKUP_CHANNEL_ID)
-    if not channel:
-        print(f"⚠️ [バックアップ] ID {BACKUP_CHANNEL_ID} のチャンネルが見つかりません。ローカルファイルを読み込みます。")
-        load_points_local()
-        return
-
-    print("🔄 [バックアップ] Discordのチャンネルから最新のポイントデータを探索中...")
-    found_backup = False
+def load_points():
+    global points_data
     
-    # チャンネルの履歴から最新の points.json を探索
-    async for message in channel.history(limit=50):
-        if message.attachments:
-            for attachment in message.attachments:
-                if attachment.filename == "points.json":
-                    try:
-                        file_bytes = await attachment.read()
-                        points_cache = json.loads(file_bytes.decode("utf-8"))
-                        
-                        # ローカルに書き出して同期
-                        with open(POINTS_FILE, "w", encoding="utf-8") as f:
-                            json.dump(points_cache, f, ensure_ascii=False, indent=4)
-                        
-                        print(f"✅ [バックアップ] Discordからデータを正常に復元しました！ (メッセージID: {message.id})")
-                        found_backup = True
-                        break
-                    except Exception as e:
-                        print(f"❌ [バックアップ] データの読み込みに失敗しました: {e}")
-            if found_backup:
-                break
-
-    if not found_backup:
-        print("ℹ️ [バックアップ] Discord上に有効なデータが見つかりませんでした。ローカルの読み込みを試みます。")
-        load_points_local()
-
-def load_points_local():
-    """ローカルファイルからデータをロード（フォールバック用）"""
-    global points_cache
+    # 通常のデータファイルがあれば読み込む
     if os.path.exists(POINTS_FILE):
         try:
             with open(POINTS_FILE, "r", encoding="utf-8") as f:
-                points_cache = json.load(f)
-                print("📁 [ローカル] points.json からデータを読み込みました。")
+                points_data = json.load(f)
+                print("【システム】ポイントデータを読み込みました。")
+                return
         except Exception as e:
-            print(f"❌ [ローカル] 読み込み失敗、初期化します: {e}")
-            points_cache = {}
-    else:
-        points_cache = {}
+            print(f"データ読み込み失敗: {e}")
 
-async def save_points_to_discord(bot):
-    """
-    ローカルの points.json を書き出し、同時にDiscordのバックアップチャンネルへ送信します。
-    """
-    global points_cache
+    # なければ新規作成
+    points_data = {}
+    print("【システム】新規ポイントデータを作成しました。")
+
+def save_points():
     try:
-        # 1. ローカルに保存
         with open(POINTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(points_cache, f, ensure_ascii=False, indent=4)
-        
-        # 2. Discordチャンネルへ送信
-        channel = bot.get_channel(BACKUP_CHANNEL_ID)
-        if channel:
-            with open(POINTS_FILE, "rb") as f:
-                discord_file = discord.File(f, filename="points.json")
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                await channel.send(
-                    content=f"📦 **ポイントデータベース自動同期**\n保存日時: `{now_str}`\nユーザー数: `{len(points_cache)}名`",
-                    file=discord_file
-                )
-            print("💾 [バックアップ] Discordへ最新データをアップロードしました！")
-        else:
-            print(f"⚠️ [バックアップ] 送信先チャンネル(ID: {BACKUP_CHANNEL_ID})が見つかりません。")
+            json.dump(points_data, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"❌ [バックアップ] 保存・同期中にエラーが発生しました: {e}")
+        print(f"データ保存失敗: {e}")
 
-def get_user_data(user_id_str: str) -> dict:
-    """ユーザーデータを取得、存在しなければ新規作成"""
-    global points_cache
-    if user_id_str not in points_cache:
-        points_cache[user_id_str] = {
-            "points": 0,
-            "logs": []
-        }
-    if "points" not in points_cache[user_id_str]:
-        points_cache[user_id_str]["points"] = 0
-    if "logs" not in points_cache[user_id_str]:
-        points_cache[user_id_str]["logs"] = []
-    return points_cache[user_id_str]
+def get_user_data(user_id: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+        save_points()
+    return points_data[user_id]
 
-async def update_user_data_async(bot, user_id_str: str, new_points: int, log_entry: str = None):
-    """ユーザーデータを更新し、Discordへ非同期保存・同期します"""
-    global points_cache
-    user_data = get_user_data(user_id_str)
-    user_data["points"] = new_points
-    if log_entry:
-        user_data["logs"].append(log_entry)
-        if len(user_data["logs"]) > 100:
-            user_data["logs"] = user_data["logs"][-100:] # 最大100件維持
-    
-    await save_points_to_discord(bot)
+def update_user_data(user_id: str, points: int, log_entry: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+    points_data[user_id]["points"] = points
+    points_data[user_id]["logs"].append(log_entry)
+    save_points()
+
 
 # ==========================================
-# 外部接続用の初期設定関数 (メインファイルから呼ぶ用)
+# [DM用] 改善点・問題点の入力モーダル
 # ==========================================
-async def setup_sub_system(bot):
-    """起動時にメインから呼び出し、自動同期を開始します"""
-    await load_points_from_discord(bot)
-
-# ==========================================
-# チケット管理Views & クイズクラス (すべて復元！)
-# ==========================================
-
-class StarRatingView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=None)
+class FeedbackModal(discord.ui.Modal):
+    def __init__(self, rating_stars: int, user_id: int):
+        super().__init__(title="問い合わせへのフィードバック")
+        self.rating_stars = rating_stars
         self.user_id = user_id
 
-    @discord.ui.button(label="⭐1", style=discord.ButtonStyle.secondary, custom_id="rate_1")
-    async def rate_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_rating(interaction, 1)
+    feedback_text = discord.ui.TextInput(
+        label="改善点・問題点があればご記入ください",
+        style=discord.TextStyle.paragraph,
+        placeholder="ここに入力してください（任意）",
+        required=False,
+        max_length=1000
+    )
 
-    @discord.ui.button(label="⭐2", style=discord.ButtonStyle.secondary, custom_id="rate_2")
-    async def rate_2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_rating(interaction, 2)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        stars_str = "⭐" * self.rating_stars if self.rating_stars > 0 else "🖤 (星0)"
+        embed = discord.Embed(
+            title="📊 問い合わせ評価・フィードバック受信",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 評価ユーザー", value=f"<@{self.user_id}> (`{self.user_id}`)", inline=False)
+        embed.add_field(name="⭐ 満足度評価", value=f"**{stars_str}** ({self.rating_stars}/5)", inline=False)
+        embed.add_field(name="💬 改善点・問題点", value=self.feedback_text.value or "*記述なし*", inline=False)
 
-    @discord.ui.button(label="⭐3", style=discord.ButtonStyle.secondary, custom_id="rate_3")
-    async def rate_3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_rating(interaction, 3)
-
-    @discord.ui.button(label="⭐4", style=discord.ButtonStyle.secondary, custom_id="rate_4")
-    async def rate_4(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_rating(interaction, 4)
-
-    @discord.ui.button(label="⭐5", style=discord.ButtonStyle.secondary, custom_id="rate_5")
-    async def rate_5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_rating(interaction, 5)
-
-    async def process_rating(self, interaction: discord.Interaction, stars: int):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ あなたはこの問い合わせの当事者ではないため、評価できません。", ephemeral=True)
-            return
-        await interaction.response.send_message(f"💖 ご協力ありがとうございました！今回の対応を **⭐{stars}** で受け付けました。", ephemeral=True)
-        self.stop()
+        rating_channel = interaction.client.get_channel(RATING_CHANNEL_ID)
+        if rating_channel:
+            await rating_channel.send(embed=embed)
+        await interaction.followup.send("ご協力ありがとうございました！", ephemeral=True)
 
 
+# ==========================================
+# [DM用] 星評価（0〜5）のボタン
+# ==========================================
+class StarRatingView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+
+    async def handle_rating(self, interaction: discord.Interaction, stars: int):
+        for child in self.children:
+            child.disabled = True
+        await interaction.message.edit(view=self)
+        await interaction.response.send_modal(FeedbackModal(rating_stars=stars, user_id=self.user_id))
+
+    @discord.ui.button(label="⭐0", style=discord.ButtonStyle.secondary, custom_id="star_0")
+    async def star0(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 0)
+    @discord.ui.button(label="⭐1", style=discord.ButtonStyle.danger, custom_id="star_1")
+    async def star1(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 1)
+    @discord.ui.button(label="⭐2", style=discord.ButtonStyle.danger, custom_id="star_2")
+    async def star2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 2)
+    @discord.ui.button(label="⭐3", style=discord.ButtonStyle.success, custom_id="star_3")
+    async def star3(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 3)
+    @discord.ui.button(label="⭐4", style=discord.ButtonStyle.success, custom_id="star_4")
+    async def star4(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 4)
+    @discord.ui.button(label="⭐5", style=discord.ButtonStyle.primary, custom_id="star_5")
+    async def star5(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 5)
+
+
+# ==========================================
+# [DM用] クローズ同意ボタン
+# ==========================================
+class CloseRequestConfirmView(discord.ui.View):
+    def __init__(self, channel_id: int, user_id: int, channel_name: str, staff_mention: str):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+        self.user_id = user_id
+        self.channel_name = channel_name
+        self.staff_mention = staff_mention
+
+    @discord.ui.button(label="🔒 閉じる", style=discord.ButtonStyle.danger, custom_id="user_confirm_close")
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot = interaction.client
+        ticket_channel = bot.get_channel(self.channel_id)
+        
+        button.disabled = True
+        button.label = "クローズされました"
+        await interaction.message.edit(view=self)
+        await interaction.response.defer()
+
+        log_lines = []
+        if ticket_channel:
+            await ticket_channel.send("🔒 ユーザーがクローズを承諾しました。ログをエクスポート中...")
+            async for msg in ticket_channel.history(limit=100, oldest_first=True):
+                if msg.embeds:
+                    for emb in msg.embeds:
+                        author_name = emb.author.name if emb.author else "システム"
+                        log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
+                elif msg.content:
+                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+
+        full_log_text = "\n".join(log_lines)
+
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title=f"🔒 チケットクローズログ: {self.channel_name}",
+                description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`/closereq`)",
+                color=discord.Color.red(), timestamp=datetime.now()
+            )
+            if len(full_log_text) > 3000 or len(full_log_text) == 0:
+                with io.StringIO(full_log_text) as f:
+                    file = discord.File(f, filename=f"log-{self.channel_name}.txt")
+                    await log_channel.send(embed=log_embed, file=file)
+            else:
+                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
+                await log_channel.send(embed=log_embed)
+
+        if ticket_channel:
+            await asyncio.sleep(2)
+            await ticket_channel.delete()
+
+        rating_embed = discord.Embed(
+            title="📝 問い合わせ評価のお願い",
+            description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
+            color=discord.Color.gold()
+        )
+        rating_view = StarRatingView(user_id=self.user_id)
+        await interaction.followup.send(embed=rating_embed, view=rating_view)
+
+
+# ==========================================
+# スタッフ用：担当者登録用ボタン
+# ==========================================
 class SupportClaimView(discord.ui.View):
     def __init__(self, user_id: int, user_name: str):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.user_name = user_name
 
-    @discord.ui.button(label="🙋‍♂️ 対応を担当する", style=discord.ButtonStyle.green, custom_id="claim_ticket_btn")
-    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🙋‍♂️ 担当する", style=discord.ButtonStyle.primary, custom_id="claim_ticket")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel = interaction.channel
-        await channel.edit(name=f"担当-{interaction.user.name}", topic=f"User ID: {self.user_id} | Staff: {interaction.user.id}")
-        
-        embed = discord.Embed(
-            title="🤝 担当者が決定しました",
-            description=f"この問い合わせは {interaction.user.mention} が担当します。\nよろしくお願いいたします！",
-            color=discord.Color.blue()
-        )
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
-        await channel.send(embed=embed)
-
-
-class QuizGameView(discord.ui.View):
-    """クイズ用の三択・四択ボタンビュー"""
-    def __init__(self, correct_idx: int, choices: list, question_id: str, bot_client):
-        super().__init__(timeout=15.0)
-        self.correct_idx = correct_idx
-        self.choices = choices
-        self.question_id = question_id
-        self.bot_client = bot_client
-        self.answered_users = set()
-
-        for idx, choice in enumerate(choices):
-            style = discord.ButtonStyle.secondary
-            btn = discord.ui.Button(label=f"{idx+1}. {choice}", style=style, custom_id=f"quiz_choice_{idx}")
-            btn.callback = self.make_callback(idx)
-            self.add_item(btn)
-
-    def make_callback(self, idx: int):
-        async def callback(interaction: discord.Interaction):
-            user_id_str = str(interaction.user.id)
-            if user_id_str in self.answered_users:
-                await interaction.response.send_message("❌ すでにこのクイズに回答しています！", ephemeral=True)
-                return
-
-            self.answered_users.add(user_id_str)
-
-            if idx == self.correct_idx:
-                user_data = get_user_data(user_id_str)
-                new_points = user_data["points"] + 50
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                log_entry = f"[{now_str}] 🪙 +50 pt (クイズ正解報酬)"
-                await update_user_data_async(self.bot_client, user_id_str, new_points, log_entry)
-
-                await interaction.response.send_message(
-                    f"🎉 正解です！\nあなたの選んだ「{self.choices[idx]}」は正しい回答です！\n**50ポイント** 🪙 を獲得しました！ (現在の所持: `{new_points} pt`)",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    f"❌ 残念、不正解です！\n正解は「{self.correct_idx+1}. {self.choices[self.correct_idx]}」でした。",
-                    ephemeral=True
-                )
-        return callback
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        self.stop()
-
-# ==========================================
-# スラッシュコマンド（チケット＆ポイント統合）
-# ==========================================
-
-def setup_slash_commands(bot: discord.Client):
-    """メイン側からすべてのコマンドを登録します"""
-
-    # --- /create_ticket_panel (問い合わせパネル作成) ---
-    @bot.tree.command(name="create_ticket_panel", description="問い合わせを開始するためのパネル（ボタン付きメッセージ）を設置します")
-    async def create_ticket_panel_command(interaction: discord.Interaction):
-        # 権限チェック
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        if "-with-" in channel.name:
+            await interaction.response.send_message("❌ このチケットは既に他のスタッフが担当しています。", ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title="📩 問い合わせ窓口",
-            description="チケットを開いて、運営スタッフへの個別問い合わせチャネルを作成します。\n下のボタンをクリックして開始してください。",
-            color=discord.Color.blue()
-        )
+        staff = interaction.user
+        new_channel_name = f"{self.user_name.lower()}-with-{staff.name.lower()}"
+        await channel.edit(name=new_channel_name, topic=f"User ID: {self.user_id} | Staff ID: {staff.id}")
         
-        class CreateTicketView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=None)
-            
-            @discord.ui.button(label="✉️ チケットを開く", style=discord.ButtonStyle.primary, custom_id="open_ticket_btn_main")
-            async def open_ticket(self, press_interaction: discord.Interaction, button: discord.ui.Button):
-                await press_interaction.response.send_message("🔄 チケットを開設しています...", ephemeral=True)
-                
-                guild = press_interaction.guild
-                category = guild.get_channel(INBOX_CATEGORY_ID)
-                
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    press_interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                    guild.get_role(ADMIN_ROLE_ID_POINTS): discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                }
-                
-                channel_name = f"ticket-{press_interaction.user.name.lower()}"
-                ticket_channel = await guild.create_text_channel(
-                    name=channel_name,
-                    category=category,
-                    overwrites=overwrites,
-                    topic=f"User ID: {press_interaction.user.id}"
-                )
-                
-                claim_view = SupportClaimView(user_id=press_interaction.user.id, user_name=press_interaction.user.name)
-                welcome_embed = discord.Embed(
-                    title="🔔 チケットが開かれました",
-                    description=f"{press_interaction.user.mention}さん、ようこそ。\nこちらにお問い合わせ内容をご記入ください。\n運営スタッフが対応するまで今しばらくお待ちください。",
+        button.label = f"担当者: {staff.name}"
+        button.style = discord.ButtonStyle.success
+        button.disabled = True
+        await interaction.message.edit(view=self)
+        
+        await interaction.response.send_message(f"🤝 {staff.mention} が担当者になりました。通常発言がユーザーに転送されます。")
+        
+        try:
+            user = await interaction.client.fetch_user(self.user_id)
+            if user:
+                embed = discord.Embed(
+                    description=f"💁‍♂️ あなたの問い合わせの担当者が **{staff.mention}** に決定しました。\n用件をそのままお話しください。",
                     color=discord.Color.green()
                 )
-                await ticket_channel.send(embed=welcome_embed, view=claim_view)
-        
-        await interaction.response.send_message("✅ 問い合わせパネルを作成しました。", ephemeral=True)
-        await interaction.channel.send(embed=embed, view=CreateTicketView())
+                await user.send(embed=embed)
+        except Exception as e:
+            await channel.send(f"⚠️ ユーザーへのDM通知に失敗: {e}")
 
-    # --- /close_ticket コマンド ---
-    @bot.tree.command(name="close_ticket", description="【運営専用】この問い合わせチケットをクローズします")
-    async def close_ticket_command(interaction: discord.Interaction):
+
+# ==========================================
+# Modmail コアロジック (イベント処理)
+# ==========================================
+def setup_modmail_events(bot: commands.Bot):
+
+    @bot.event
+    async def on_message(message: discord.Message):
+        if message.author.bot:
+            return
+
+        # 1. ユーザー ➡ BotへのDM
+        if isinstance(message.channel, discord.DMChannel):
+            if not bot.guilds: return
+            guild = bot.guilds[0]
+            category = guild.get_channel(INBOX_CATEGORY_ID)
+            if not category: return
+
+            existing_channel = None
+            for ch in category.text_channels:
+                if ch.topic and f"User ID: {message.author.id}" in ch.topic:
+                    existing_channel = ch
+                    break
+
+            if not existing_channel:
+                channel_name = f"{message.author.name.lower()}"
+                
+                staff_role = guild.get_role(ADMIN_ROLE_ID)
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+                if staff_role:
+                    overwrites[staff_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_messages=True)
+
+                existing_channel = await guild.create_text_channel(
+                    name=channel_name, category=category, topic=f"User ID: {message.author.id}", overwrites=overwrites
+                )
+
+                dm_welcome = discord.Embed(
+                    title="📩 問い合わせを受け付けました",
+                    description="サーバー運営チームにメッセージが転送されました。\n担当者が決定するまでしばらくお待ちください。",
+                    color=discord.Color.blue()
+                )
+                await message.channel.send(embed=dm_welcome)
+
+                member = guild.get_member(message.author.id)
+                roles_str = ", ".join([r.mention for r in member.roles if r != guild.default_role]) if member else "取得不可"
+                join_at = member.joined_at.strftime('%Y/%m/%d %H:%M') if member and member.joined_at else "不明"
+
+                info_embed = discord.Embed(title="📩 新規問い合わせチケット", color=discord.Color.orange())
+                info_embed.add_field(name="👤 ユーザー名", value=f"{message.author.mention} ({message.author})", inline=True)
+                info_embed.add_field(name="🆔 ユーザーID", value=f"`{message.author.id}`", inline=True)
+                info_embed.add_field(name="📅 サーバー参加日", value=join_at, inline=False)
+                info_embed.add_field(name="🛡️ 所持ロール", value=roles_str or "なし", inline=False)
+                info_embed.add_field(name="💬 メッセージ", value=message.content, inline=False)
+
+                view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
+                await existing_channel.send(embed=info_embed, view=view)
+                await message.add_reaction("✅")
+                return
+
+            user_embed = discord.Embed(description=message.content, color=discord.Color.green())
+            user_embed.set_author(name=f"{message.author} (DM)", icon_url=message.author.display_avatar.url)
+            await existing_channel.send(embed=user_embed)
+            await message.add_reaction("✅")
+
+        # 2. スタッフ側の発言 ➡ ユーザーのDMへ転送
+        elif isinstance(message.channel, discord.TextChannel) and message.channel.category_id == INBOX_CATEGORY_ID:
+            if message.content.startswith("/"): return
+            if not message.channel.topic or "User ID:" not in message.channel.topic: return
+
+            try:
+                parts = message.channel.topic.split("|")
+                u_id = int(parts[0].replace("User ID:", "").strip())
+                user = await bot.fetch_user(u_id)
+            except: return
+
+            staff_embed = discord.Embed(description=message.content, color=discord.Color.blue())
+            staff_embed.set_author(name="ダイヤ作成所", icon_url=message.guild.icon.url if message.guild.icon else None)
+            
+            try:
+                await user.send(embed=staff_embed)
+                await message.add_reaction("✈️")
+            except discord.Forbidden:
+                await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
+
+
+# ==========================================
+# 管理・一般コマンド (各種スラッシュコマンド)
+# ==========================================
+def setup_admin_commands(bot: commands.Bot):
+    setup_modmail_events(bot)
+
+    # --- /closereq コマンド ---
+    @bot.tree.command(name="closereq", description="ユーザーにクローズ確認リクエストを送信します")
+    async def close_request(interaction: discord.Interaction):
         channel = interaction.channel
         if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
             await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
             return
+        if not channel.topic or "User ID:" not in channel.topic:
+            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
+            return
 
         await interaction.response.defer()
 
-        # ユーザーIDの解析
-        user = None
-        if channel.topic and "User ID:" in channel.topic:
-            try:
-                parts = channel.topic.split("|")
-                u_id = int(parts[0].replace("User ID:", "").strip())
-                user = await interaction.client.fetch_user(u_id)
-            except:
-                pass
+        try:
+            parts = channel.topic.split("|")
+            u_id = int(parts[0].replace("User ID:", "").strip())
+            user = await bot.fetch_user(u_id)
+        except:
+            await interaction.followup.send("❌ ユーザー情報を取得できませんでした。")
+            return
 
-        # ログ作成
+        req_embed = discord.Embed(
+            title="🔒 問い合わせ終了の確認",
+            description=f"スタッフ（{interaction.user.mention}）より、この問い合わせを終了（クローズ）して良いかの確認が届きました。\n\n問題が解決し、チケットを閉じてよろしければ、下の**「閉じる」**ボタンを押してください。",
+            color=discord.Color.yellow()
+        )
+        view = CloseRequestConfirmView(
+            channel_id=channel.id, user_id=user.id, channel_name=channel.name, staff_mention=interaction.user.mention
+        )
+        try:
+            await user.send(embed=req_embed, view=view)
+            await interaction.followup.send(f"📬 {user.mention} のDMへクローズ確認リクエストを送信しました。")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
+
+    # --- /close コマンド ---
+    @bot.tree.command(name="close", description="チケットを強制クローズします")
+    async def close_ticket(interaction: discord.Interaction):
+        channel = interaction.channel
+        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
+            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
+            return
+        if not channel.topic or "User ID:" not in channel.topic:
+            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
+            return
+
+        await interaction.response.send_message("🔒 強制クローズ処理中...")
+
+        try:
+            parts = channel.topic.split("|")
+            u_id = int(parts[0].replace("User ID:", "").strip())
+            user = await bot.fetch_user(u_id)
+        except: user = None
+
         log_lines = []
         async for msg in channel.history(limit=100, oldest_first=True):
             if msg.embeds:
@@ -370,15 +419,14 @@ def setup_slash_commands(bot: discord.Client):
                 )
                 rating_view = StarRatingView(user_id=user.id)
                 await user.send(embed=rating_embed, view=rating_view)
-            except:
-                pass
+            except: pass
 
         await asyncio.sleep(2)
         await channel.delete()
 
     # --- /change_staff コマンド ---
     @bot.tree.command(name="change_staff", description="チケットの担当スタッフをリセットして交代します")
-    async def change_staff_command(interaction: discord.Interaction):
+    async def change_staff(interaction: discord.Interaction):
         channel = interaction.channel
         if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
             await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
@@ -401,17 +449,18 @@ def setup_slash_commands(bot: discord.Client):
         await interaction.response.send_message(embed=reset_embed, view=new_view)
 
 
-    # --- /work コマンド (権限ロール確認付き) ---
+    # ==========================================
+    # ポイントシステム スラッシュコマンド
+    # ==========================================
+
+    # --- /work コマンド ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
     @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
     async def work_command(interaction: discord.Interaction):
-        # メンバー用のロールIDを持っているかチェック
         if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限（指定ロール）がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-
-        await interaction.response.defer(ephemeral=False)
 
         if random.random() < 0.70:
             earned = random.randint(200, 300)
@@ -425,7 +474,7 @@ def setup_slash_commands(bot: discord.Client):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         log_entry = f"[{now_str}] 🪙 +{earned} pt (お仕事報酬)"
         
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
+        update_user_data(user_id_str, new_points, log_entry)
 
         embed = discord.Embed(
             title="💼 お仕事完了！",
@@ -434,7 +483,7 @@ def setup_slash_commands(bot: discord.Client):
             timestamp=datetime.now()
         )
         embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
-        await interaction.followup.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     @work_command.error
     async def work_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -452,15 +501,9 @@ def setup_slash_commands(bot: discord.Client):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- /points コマンド (メンバー用ロールが必要) ---
+    # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
     async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        # メンバー用のロールIDを持っているかチェック
-        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
         target_user = ユーザー or interaction.user
         user_data = get_user_data(str(target_user.id))
 
@@ -473,15 +516,9 @@ def setup_slash_commands(bot: discord.Client):
         embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /pointlog コマンド (メンバー用ロールが必要) ---
+    # --- /pointlog コマンド ---
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        # メンバー用のロールIDを持っているかチェック
-        if not any(role.id == WORK_ROLE_ID for role in interaction.user.roles):
-            embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
         target_user = ユーザー or interaction.user
         user_data = get_user_data(str(target_user.id))
 
@@ -510,15 +547,13 @@ def setup_slash_commands(bot: discord.Client):
             embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /give_points コマンド (管理者用ロールが必要) ---
+    # --- /give_points コマンド ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
     async def give_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-
-        await interaction.response.defer(ephemeral=False)
 
         user_id_str = str(ユーザー.id)
         user_data = get_user_data(user_id_str)
@@ -527,14 +562,14 @@ def setup_slash_commands(bot: discord.Client):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         log_entry = f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})"
         
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
+        update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="✅ ポイント付与完了",
             description=f"{ユーザー.mention} に **{ポイント数}** ポイントを付与しました。\n理由: {理由}",
             color=discord.Color.green()
         )
-        await interaction.followup.send(embed=res_embed)
+        await interaction.response.send_message(embed=res_embed, ephemeral=False)
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
@@ -543,17 +578,15 @@ def setup_slash_commands(bot: discord.Client):
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
             noti_embed.add_field(name="理由", value=理由, inline=False)
-            await log_channel.send(embed=noti_embed)
+            await log_channel.send(noti_embed)
 
-    # --- /take_points コマンド (管理者用ロールが必要) ---
+    # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
     async def take_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, ephemeral=False)
             return
-
-        await interaction.response.defer(ephemeral=False)
 
         user_id_str = str(ユーザー.id)
         user_data = get_user_data(user_id_str)
@@ -562,14 +595,14 @@ def setup_slash_commands(bot: discord.Client):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         log_entry = f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})"
         
-        await update_user_data_async(bot, user_id_str, new_points, log_entry)
+        update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="⚠️ ポイント消費",
             description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費しました。\n目的・理由: {理由}",
             color=discord.Color.orange()
         )
-        await interaction.followup.send(embed=res_embed)
+        await interaction.response.send_message(embed=res_embed, ephemeral=False)
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
@@ -578,4 +611,4 @@ def setup_slash_commands(bot: discord.Client):
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
             noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
             noti_embed.add_field(name="使用用途（理由）", value=理由, inline=False)
-            await log_channel.send(embed=noti_embed)
+            await log_channel.send(noti_embed)
