@@ -1,4 +1,3 @@
-
 from datetime import datetime, timedelta
 import json
 import os
@@ -6,6 +5,9 @@ import random
 import threading
 import time
 import asyncio
+
+# 🛠️ 新しいシステム（sub.py）をインポート
+import sub
 
 # ==========================================
 # Flask (RenderやUptimeRobot等の死活監視用)
@@ -31,8 +33,13 @@ except ModuleNotFoundError:
 app = Flask(__name__)
 
 @app.route("/")
-def health():
+def home():
     return "Bot is running"
+
+# Renderのヘルスチェック用に追加
+@app.route("/health")
+def health():
+    return "OK", 200
 
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
@@ -433,9 +440,27 @@ async def quiz_command(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
+    
+    # ------------------------------------------
+    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
+    # ------------------------------------------
+    print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
+    try:
+        await sub.setup_sub_system(bot)
+        print("✅ [起動処理] データベースの初期同期が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
+
+    print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
+    sub.setup_slash_commands(bot)
+    # ------------------------------------------
+    # 🛠️ ここまで
+    # ------------------------------------------
+
+    print("⚡ [起動処理] 全コマンドをDiscordサーバー側へ同期中...")
     try:
         synced = await bot.tree.sync()
-        print(f"{len(synced)} 個のコマンドを同期しました。")
+        print(f"🚀 {len(synced)} 個のコマンドを同期しました。(すべての機能が有効です)")
     except Exception as e:
         print(f"同期エラー: {e}")
 
