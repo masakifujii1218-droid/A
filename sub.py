@@ -2,7 +2,7 @@
 # sub.py (Modmailシステム + ポイントシステム)
 # ==========================================
 import discord
-from discord.ext import commands  # 不要な tasks のインポートを削除
+from discord.ext import commands
 from discord import app_commands
 import asyncio
 from datetime import datetime
@@ -17,7 +17,7 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v7.1.0 (Modmail + Point System)"
+VERSION = "v7.1.1 (Modmail + Point System)"
 
 # --- ポイントシステム用設定 ---
 LOG_CHANNEL_ID_POINTS = 1526289865719943329  # ポイント通知用チャンネルID
@@ -35,7 +35,6 @@ points_data = {}
 def load_points():
     global points_data
     
-    # 通常のデータファイルがあれば読み込む
     if os.path.exists(POINTS_FILE):
         try:
             with open(POINTS_FILE, "r", encoding="utf-8") as f:
@@ -45,7 +44,6 @@ def load_points():
         except Exception as e:
             print(f"データ読み込み失敗: {e}")
 
-    # なければ新規作成
     points_data = {}
     print("【システム】新規ポイントデータを作成しました。")
 
@@ -320,6 +318,9 @@ def setup_modmail_events(bot: commands.Bot):
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
+        # 他のコグや標準コマンドが動くようにイベントをパスする
+        await bot.process_commands(message)
+
 
 # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
@@ -503,8 +504,9 @@ def setup_admin_commands(bot: commands.Bot):
 
     # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
-    async def points_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        target_user = ユーザー or interaction.user
+    @app_commands.describe(user="ポイントを確認したいユーザーを指定（未指定で自分）")
+    async def points_command(interaction: discord.Interaction, user: discord.User = None):
+        target_user = user or interaction.user
         user_data = get_user_data(str(target_user.id))
 
         embed = discord.Embed(
@@ -518,8 +520,9 @@ def setup_admin_commands(bot: commands.Bot):
 
     # --- /pointlog コマンド ---
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
-    async def pointlog_command(interaction: discord.Interaction, ユーザー: discord.User = None):
-        target_user = ユーザー or interaction.user
+    @app_commands.describe(user="履歴を確認したいユーザーを指定（未指定で自分）")
+    async def pointlog_command(interaction: discord.Interaction, user: discord.User = None):
+        target_user = user or interaction.user
         user_data = get_user_data(str(target_user.id))
 
         embed = discord.Embed(
@@ -549,24 +552,25 @@ def setup_admin_commands(bot: commands.Bot):
 
     # --- /give_points コマンド ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
-    async def give_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
+    @app_commands.describe(user="付与する対象のユーザー", amount="増やすポイント数", reason="付与する理由・説明")
+    async def give_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
 
-        user_id_str = str(ユーザー.id)
+        user_id_str = str(user.id)
         user_data = get_user_data(user_id_str)
-        new_points = user_data["points"] + ポイント数
+        new_points = user_data["points"] + amount
         
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"[{now_str}] 🪙 +{ポイント数} pt (付与: {理由})"
+        log_entry = f"[{now_str}] 🪙 +{amount} pt (付与: {reason})"
         
         update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="✅ ポイント付与完了",
-            description=f"{ユーザー.mention} に **{ポイント数}** ポイントを付与しました。\n理由: {理由}",
+            description=f"{user.mention} に **{amount}** ポイントを付与しました。\n理由: {reason}",
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
@@ -574,32 +578,33 @@ def setup_admin_commands(bot: commands.Bot):
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
             noti_embed = discord.Embed(title="📥 ポイント変動通知 (付与)", color=discord.Color.green(), timestamp=datetime.now())
-            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
+            noti_embed.add_field(name="対象者", value=user.mention, inline=True)
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
-            noti_embed.add_field(name="変動値", value=f"+{ポイント数} pt", inline=True)
-            noti_embed.add_field(name="理由", value=理由, inline=False)
+            noti_embed.add_field(name="変動値", value=f"+{amount} pt", inline=True)
+            noti_embed.add_field(name="理由", value=reason, inline=False)
             await log_channel.send(noti_embed)
 
     # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
-    async def take_points_command(interaction: discord.Interaction, ユーザー: discord.User, ポイント数: int, 理由: str):
+    @app_commands.describe(user="消費させる対象のユーザー", amount="減らすポイント数", reason="消費する理由・目的")
+    async def take_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
         if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
             embed = discord.Embed(description="❌ このコマンドを実行する権限がありません。", color=discord.Color.red())
             await interaction.response.send_message(embed=embed, ephemeral=False)
             return
 
-        user_id_str = str(ユーザー.id)
+        user_id_str = str(user.id)
         user_data = get_user_data(user_id_str)
-        new_points = user_data["points"] - ポイント数
+        new_points = user_data["points"] - amount
         
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        log_entry = f"[{now_str}] 💸 -{ポイント数} pt (消費: {理由})"
+        log_entry = f"[{now_str}] 💸 -{amount} pt (消費: {reason})"
         
         update_user_data(user_id_str, new_points, log_entry)
 
         res_embed = discord.Embed(
             title="⚠️ ポイント消費",
-            description=f"{ユーザー.mention} のポイントを **{ポイント数}** 消費しました。\n目的・理由: {理由}",
+            description=f"{user.mention} のポイントを **{amount}** 消費しました。\n目的・理由: {reason}",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=res_embed, ephemeral=False)
@@ -607,8 +612,8 @@ def setup_admin_commands(bot: commands.Bot):
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID_POINTS)
         if log_channel:
             noti_embed = discord.Embed(title="📤 ポイント変動通知 (消費)", color=discord.Color.red(), timestamp=datetime.now())
-            noti_embed.add_field(name="対象者", value=ユーザー.mention, inline=True)
+            noti_embed.add_field(name="対象者", value=user.mention, inline=True)
             noti_embed.add_field(name="対応者", value=interaction.user.mention, inline=True)
-            noti_embed.add_field(name="変動値", value=f"-{ポイント数} pt", inline=True)
-            noti_embed.add_field(name="使用用途（理由）", value=理由, inline=False)
+            noti_embed.add_field(name="変動値", value=f"-{amount} pt", inline=True)
+            noti_embed.add_field(name="使用用途（理由）", value=reason, inline=False)
             await log_channel.send(noti_embed)
