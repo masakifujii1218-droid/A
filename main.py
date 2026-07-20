@@ -465,12 +465,12 @@ async def on_ready():
         print(f"同期エラー: {e}")
 
 # ==========================================
-# 🛠️ BOT管理部専用 !botinfo コマンド (完全追加分)
+# 🛠️ BOT管理部専用 !botinfo コマンド (ロールID判定版)
 # ==========================================
 import psutil
 
-# 許可された管理部のユーザーIDリスト
-ADMIN_USER_IDS = [1528521149582151751, 1510021467167789104]
+# 許可された管理部の【ロールID】リスト
+ADMIN_ROLE_IDS = [1528521149582151751, 1510021467167789104]
 
 # エラーログと起動時間・オンライン時間の初期化
 error_logs = []
@@ -489,39 +489,38 @@ async def on_error(event, *args, **kwargs):
 
 @bot.command(name="botinfo")
 async def botinfo_command(ctx):
-    # 1. 権限チェック（IDが一致しない場合は完全に無視）
-    if ctx.author.id not in ADMIN_USER_IDS:
+    # DM（ダイレクトメッセージ）での実行を防ぐ
+    if ctx.guild is None:
         return
 
-    global bot_last_online_time
-    bot_last_online_time = time.time()  # コマンドが実行できた＝オンラインなので時刻更新
+    # ロール ID チェック（所持しているロールの中に管理部IDがあるか判定）
+    user_role_ids = [role.id for role in ctx.author.roles]
+    if not any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids):
+        return  # ロールを持っていない場合は無反応でスルー
 
-    # 2. 各種ステータスの計算
-    # Ping (応答速度)
+    global bot_last_online_time
+    bot_last_online_time = time.time()  # コマンドが動作した時刻を記録
+
+    # 各種ステータスの計算
     ping = round(bot.latency * 1000) if bot.latency is not None else 0
     
-    # メモリ使用率 (Render無料枠 512MB基準)
     process = psutil.Process(os.getpid())
     mem_bytes = process.memory_info().rss
     mem_mb = round(mem_bytes / (1024 * 1024), 1)
     mem_percent = round((mem_mb / 512) * 100, 1)
 
-    # 起動してからの経過時間
     uptime_seconds = int(time.time() - bot_start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     
-    # 時刻のフォーマット化 (日本時間)
     start_str = time.strftime("%Y/%m/%d %H:%M", time.localtime(bot_start_time))
     online_str = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(bot_last_online_time))
 
-    # 3. エラー表示の生成
     if error_logs:
         error_content = "\n".join([f"{i+1}. `{log}`" for i, log in enumerate(error_logs)])
     else:
         error_content = "なし"
 
-    # 4. 埋め込みメッセージ（Embed）で出力
     embed = discord.Embed(title="🤖 Bot稼働状況", color=0x00ff00)
     embed.add_field(name="● 現在のステータス", value="正常稼働中", inline=False)
     embed.add_field(name="● Discord API接続状況", value="良好（Connected）\n*※ここが「切断（Disconnected）」ならゾンビ状態です*", inline=False)
