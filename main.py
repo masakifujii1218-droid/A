@@ -464,14 +464,6 @@ async def on_ready():
     except Exception as e:
         print(f"同期エラー: {e}")
 
-if __name__ == "__main__":
-    keep_alive()
-    
-    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
 # ==========================================
 # 🛠️ BOT管理部専用 !botinfo コマンド (完全追加分)
 # ==========================================
@@ -541,3 +533,16 @@ async def botinfo_command(ctx):
     embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str} (リアルタイム)", inline=False)
 
     await ctx.send(embed=embed)
+
+
+# ==========================================
+# 起動実行部（⚠️必ずこのファイルの最後にあること！）
+# ==========================================
+if __name__ == "__main__":
+    keep_alive()
+    
+    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
