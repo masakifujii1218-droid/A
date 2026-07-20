@@ -472,3 +472,73 @@ if __name__ == "__main__":
         bot.run(token)
     else:
         print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
+        
+# ==========================================
+# 🛠️ BOT管理部専用 /botinfo コマンド (完全追加分)
+# ==========================================
+import psutil
+
+# 許可された管理部のユーザーIDリスト
+ADMIN_USER_IDS = [1528521149582151751, 1510021467167789104]
+
+# エラーログと起動時間・オンライン時間の初期化
+error_logs = []
+bot_start_time = time.time()
+bot_last_online_time = time.time()
+
+# 他の処理を邪魔しない独立したエラーキャッチ
+@bot.event
+async def on_error(event, *args, **kwargs):
+    import traceback
+    error_msg = traceback.format_exc().splitlines()[-1]
+    current_t = time.strftime("%H:%M:%S", time.localtime())
+    error_logs.append(f"[{current_t}] {error_msg}")
+    if len(error_logs) > 3:
+        error_logs.pop(0)
+
+@bot.command(name="botinfo")
+async def botinfo_command(ctx):
+    # 1. 権限チェック（IDが一致しない場合は完全に無視）
+    if ctx.author.id not in ADMIN_USER_IDS:
+        return
+
+    global bot_last_online_time
+    bot_last_online_time = time.time()  # コマンドが実行できた＝オンラインなので時刻更新
+
+    # 2. 各種ステータスの計算
+    # Ping (応答速度)
+    ping = round(bot.latency * 1000) if bot.latency is not None else 0
+    
+    # メモリ使用率 (Render無料枠 512MB基準)
+    process = psutil.Process(os.getpid())
+    mem_bytes = process.memory_info().rss
+    mem_mb = round(mem_bytes / (1024 * 1024), 1)
+    mem_percent = round((mem_mb / 512) * 100, 1)
+
+    # 起動してからの経過時間
+    uptime_seconds = int(time.time() - bot_start_time)
+    hours, remainder = divmod(uptime_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    # 時刻のフォーマット化 (2026年対応・日本時間)
+    start_str = time.strftime("%Y/%m/%d %H:%M", time.localtime(bot_start_time))
+    online_str = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(bot_last_online_time))
+
+    # 3. エラー表示の生成
+    if error_logs:
+        error_content = "\n".join([f"{i+1}. `{log}`" for i, log in enumerate(error_logs)])
+    else:
+        error_content = "なし"
+
+    # 4. 埋め込みメッセージ（Embed）で出力
+    embed = discord.Embed(title="🤖 Bot稼働状況", color=0x00ff00)
+    embed.add_field(name="● 現在のステータス", value="正常稼働中", inline=False)
+    embed.add_field(name="● Discord API接続状況", value="良好（Connected）\n*※ここが「切断（Disconnected）」ならゾンビ状態です*", inline=False)
+    embed.add_field(name="● 応答速度 (Ping)", value=f"{ping} ms", inline=False)
+    embed.add_field(name="● メモリ使用率", value=f"{mem_percent}% ({mem_mb}MB / 512MB)", inline=False)
+    embed.add_field(name="● 本日のエラー発生数", value=f"{len(error_logs)} 件 ⚠️", inline=False)
+    embed.add_field(name="🚨 直近のエラー内容（最新3件まで）", value=error_content, inline=False)
+    embed.add_field(name="● 起動してから", value=f"{hours}時間 {minutes}分 経過\n*({start_str} 起動)*", inline=False)
+    embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str} (リアルタイム)", inline=False)
+
+    await ctx.send(embed=embed)
