@@ -5,17 +5,12 @@ import random
 import threading
 import time
 import asyncio
-import psutil
 
-import discord
-from discord.ext import commands
-from discord import app_commands
-
-# 🛠️ サブモジュール（sub.py）をインポート
+# 🛠️ サブシステム (sub.py) をインポート
 import sub
 
 # ==========================================
-# Flask (Render / 死活監視用 Web サーバー)
+# Flask (RenderやUptimeRobot等の死活監視用)
 # ==========================================
 try:
     from flask import Flask
@@ -33,6 +28,7 @@ except ModuleNotFoundError:
 
         def run(self, *args, **kwargs):
             pass
+    print("警告: flask がインストールされていないため、ダミーを使用します。")
 
 app = Flask(__name__)
 
@@ -52,35 +48,14 @@ def keep_alive():
     t.start()
 
 # ==========================================
-# Discord Bot 本体設定 & setup_hook による初期化
+# Discord
 # ==========================================
+import discord
+from discord.ext import commands
+from discord import app_commands
+
 intents = discord.Intents.all()
-
-class CustomBot(commands.Bot):
-    async def setup_hook(self):
-        """
-        Bot起動時（非同期イベントループが完全に開始された後）に一度だけ呼ばれる安全な初期化フック
-        """
-        print("🔄 [setup_hook] sub.py のスラッシュコマンドおよび初期化処理を実行中...")
-        
-        # 1. sub.py のコマンド定義をセットアップ
-        if hasattr(sub, "setup_slash_commands"):
-            try:
-                # 関数内での create_task 呼出もイベントループ稼働後のため安全に通過します
-                sub.setup_slash_commands(self)
-                print("✅ [setup_hook] sub.py のコマンド設定が完了しました。")
-            except Exception as e:
-                print(f"⚠️ [setup_hook] setup_slash_commands 実行中の警告/エラー: {e}")
-
-        # 2. sub.py の非同期同期処理があれば実行
-        if hasattr(sub, "setup_sub_system"):
-            try:
-                await sub.setup_sub_system(self)
-                print("✅ [setup_hook] sub.py のシステム同期が完了しました。")
-            except Exception as e:
-                print(f"⚠️ [setup_hook] setup_sub_system 実行エラー: {e}")
-
-bot = CustomBot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
 # JSON 永続化データ管理
@@ -115,11 +90,27 @@ def save_usage_data(data):
     except OSError:
         pass
 
+# 🔒 Quiz.py など外部モジュールからクールダウンを安全にリセットするための外部API関数
+def reset_user_cooldown(user_id: int, command_name: str = "create") -> bool:
+    """指定ユーザーの特定コマンドのクールダウンを安全にリセットします"""
+    try:
+        user_id_str = str(user_id)
+        usage_data = load_usage_data()
+        if user_id_str in usage_data and command_name in usage_data[user_id_str]:
+            usage_data[user_id_str][command_name] = []
+            save_usage_data(usage_data)
+            return True
+        return True
+    except Exception as e:
+        print(f"❌ [クールダウンリセットエラー]: {e}")
+        return False
+
 # ==========================================
 # 権限・クールダウン設定
 # ==========================================
 COMMAND_ROLE_ID = 1510405214811852900
 ADMIN_ROLE_ID = 1510021467167789104
+DEFAULT_ROUTE_NAME = "尾羽急本線"
 
 COMMAND_RULES = {
     "create": {
@@ -165,7 +156,9 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
         return False
 
     user_roles = [getattr(role, "id", None) for role in getattr(interaction.user, "roles", [])]
-    if ADMIN_ROLE_ID in user_roles or any(role_id in rules["unlimited_roles"] for role_id in user_roles):
+    if ADMIN_ROLE_ID in user_roles:
+        return True
+    if any(role_id in rules["unlimited_roles"] for role_id in user_roles):
         return True
     if not any(role_id in rules["limited_roles"] for role_id in user_roles):
         await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
@@ -183,7 +176,7 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
         earliest = min(timestamps)
         remaining = earliest + rules["window_sec"] - now
         await interaction.response.send_message(
-            f"🚫 クールダウン中です。\n\nあと **{format_remaining_time(remaining)}** 後に利用できます。\n💡 `/quiz` に正解すると、制限をリセットできるチャンスがあります！",
+            f"🚫 クールダウン中です。\n\nあと **{format_remaining_time(remaining)}** 後に利用できます。\n💡 `/quiz` に正解すると、ポイント獲得や制限リセットのチャンスがあります！",
             ephemeral=True
         )
         user_usage[command_name] = timestamps
@@ -226,32 +219,6 @@ ROUTE_TRAIN_TYPES = {
     },
     "井問線": {"普通": IDEMON_LOCAL, "快速": IDEMON_RAPID, "急行": IDEMON_EXPRESS}
 }
-
-# ==========================================
-# クイズデータ (尾羽急鉄道クイズ)
-# ==========================================
-QUIZ_LIST = [
-    {
-        "question": "尾羽急本線の「快速急行」が、尾羽原を出発した後に最初に停車する駅はどこ？",
-        "choices": ["井口", "安越", "高徳", "千峰"],
-        "answer": "高徳"
-    },
-    {
-        "question": "空港線の終着駅はどこ？",
-        "choices": ["空港", "新高徳", "整備場", "千鳥"],
-        "answer": "空港"
-    },
-    {
-        "question": "井問線の「普通」列車で、安越から雲中までの所要時間は何秒？",
-        "choices": ["30秒", "60秒", "90秒", "120秒"],
-        "answer": "60秒"
-    },
-    {
-        "question": "尾羽急本線において、区間急行が停車しない駅は次のうちどれ？",
-        "choices": ["南雲谷", "舞子台", "千鳥", "紀田"],
-        "answer": "南雲谷"
-    }
-]
 
 # ==========================================
 # ダイヤ計算ロジック
@@ -335,58 +302,7 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
     return timetable, None
 
 # ==========================================
-# クイズ UI (ボタンコンポーネント)
-# ==========================================
-class QuizView(discord.ui.View):
-    def __init__(self, quiz_data, user_id):
-        super().__init__(timeout=60.0)
-        self.quiz_data = quiz_data
-        self.user_id = user_id
-
-        for choice in self.quiz_data["choices"]:
-            button = discord.ui.Button(label=choice, style=discord.ButtonStyle.primary, custom_id=choice)
-            button.callback = self.on_button_click
-            self.add_item(button)
-
-    async def on_button_click(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("これはあなたのクイズではありません！", ephemeral=True)
-            return
-
-        selected_answer = interaction.data["custom_id"]
-        correct_answer = self.quiz_data["answer"]
-
-        for item in self.children:
-            item.disabled = True
-
-        if selected_answer == correct_answer:
-            usage_data = load_usage_data()
-            user_id_str = str(interaction.user.id)
-            if user_id_str in usage_data:
-                if "create" in usage_data[user_id_str]:
-                    usage_data[user_id_str]["create"] = []
-                save_usage_data(usage_data)
-                benefit_text = "\n🎉 **ご褒美:** `/create` のクールダウン制限がリセットされました！"
-            else:
-                benefit_text = "\n🎉 **ご褒美:** クールダウンは制限されていません！"
-
-            embed = discord.Embed(
-                title="🟢 正解！",
-                description=f"お見事！正解は **{correct_answer}** です！{benefit_text}",
-                color=discord.Color.green()
-            )
-        else:
-            embed = discord.Embed(
-                title="🔴 不正解...",
-                description=f"残念！正解は **{correct_answer}** でした。",
-                color=discord.Color.red()
-            )
-
-        await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
-
-# ==========================================
-# スラッシュコマンド定義
+# スラッシュコマンドの実装 (/create)
 # ==========================================
 @bot.tree.command(name="create", description="新しいダイヤを作成し、各駅の時刻表を出力します。")
 @app_commands.describe(
@@ -437,97 +353,42 @@ async def create_dia_command(
     embed.set_footer(text=f"管理ID: {train_id} | 設定者: {interaction.user.name}")
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="quiz", description="尾羽急に関する鉄道クイズを出題します！正解するとダイヤ作成制限がリセットされます。")
-async def quiz_command(interaction: discord.Interaction):
-    quiz = random.choice(QUIZ_LIST)
-    
-    embed = discord.Embed(
-        title="❓ 尾羽急 鉄道クイズ！",
-        description=f"**問題:**\n{quiz['question']}\n\n下のボタンから正解を選択してください！",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text="※制限時間 60秒 | 正解すると /create のクールダウンがリセットされます！")
-
-    view = QuizView(quiz_data=quiz, user_id=interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
-
 # ==========================================
-# 起動完了イベント & コマンド同期
+# 起動処理
 # ==========================================
 @bot.event
 async def on_ready():
-    print(f"🟢 ログイン成功: {bot.user.name} (ID: {bot.user.id})")
+    print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
     
-    print("⚡ [on_ready] 全コマンドをDiscordサーバーへ同期中...")
+    # 1. sub.py の初期化
+    print("🔄 [起動処理] sub.py (ポイント・問い合わせ) の初期化...")
+    try:
+        await sub.setup_sub_system(bot)
+        sub.setup_slash_commands(bot)
+        print("✅ [起動処理] sub.py の準備が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] sub.py 初期化エラー: {e}")
+
+    # 2. Quiz.py の読み込み・連携
+    print("🔄 [起動処理] Quiz.py の読み込み...")
+    try:
+        import Quiz
+        if hasattr(Quiz, "setup_quiz_system"):
+            await Quiz.setup_quiz_system(bot)
+        print("✅ [起動処理] Quiz.py の連携が完了しました。")
+    except ModuleNotFoundError:
+        print("⚠️ [起動処理] Quiz.py が見つかりませんでした。Quiz機能はスキップされます。")
+    except Exception as e:
+        print(f"❌ [起動処理] Quiz.py 連携エラー: {e}")
+
+    # 3. スラッシュコマンドの全体同期
+    print("⚡ [起動処理] 全コマンドをDiscordサーバーへ同期中...")
     try:
         synced = await bot.tree.sync()
-        print(f"🚀 {len(synced)} 個のコマンドの同期が完了しました。")
+        print(f"🚀 {len(synced)} 個のコマンドを正常に同期しました。")
     except Exception as e:
-        print(f"❌ コマンド同期エラー: {e}")
+        print(f"同期エラー: {e}")
 
-# ==========================================
-# Bot管理部用 !botinfo コマンド
-# ==========================================
-ADMIN_ROLE_IDS = [1528521149582151751, 1510021467167789104]
-error_logs = []
-bot_start_time = time.time()
-bot_last_online_time = time.time()
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    import traceback
-    error_msg = traceback.format_exc().splitlines()[-1]
-    current_t = time.strftime("%H:%M:%S", time.localtime())
-    error_logs.append(f"[{current_t}] {error_msg}")
-    if len(error_logs) > 3:
-        error_logs.pop(0)
-
-@bot.command(name="botinfo")
-async def botinfo_command(ctx):
-    if ctx.guild is None:
-        return
-
-    user_role_ids = [role.id for role in ctx.author.roles]
-    if not any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids):
-        return
-
-    global bot_last_online_time
-    bot_last_online_time = time.time()
-
-    ping = round(bot.latency * 1000) if bot.latency is not None else 0
-    
-    process = psutil.Process(os.getpid())
-    mem_bytes = process.memory_info().rss
-    mem_mb = round(mem_bytes / (1024 * 1024), 1)
-    mem_percent = round((mem_mb / 512) * 100, 1)
-
-    uptime_seconds = int(time.time() - bot_start_time)
-    hours, remainder = divmod(uptime_seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    
-    start_str = time.strftime("%Y/%m/%d %H:%M", time.localtime(bot_start_time))
-    online_str = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(bot_last_online_time))
-
-    if error_logs:
-        error_content = "\n".join([f"{i+1}. `{log}`" for i, log in enumerate(error_logs)])
-    else:
-        error_content = "なし"
-
-    embed = discord.Embed(title="🤖 Bot稼働状況", color=0x00ff00)
-    embed.add_field(name="● 現在のステータス", value="正常稼働中", inline=False)
-    embed.add_field(name="● Discord API接続状況", value="良好（Connected）", inline=False)
-    embed.add_field(name="● 応答速度 (Ping)", value=f"{ping} ms", inline=False)
-    embed.add_field(name="● メモリ使用率", value=f"{mem_percent}% ({mem_mb}MB / 512MB)", inline=False)
-    embed.add_field(name="● 本日のエラー発生数", value=f"{len(error_logs)} 件 ⚠️", inline=False)
-    embed.add_field(name="🚨 直近のエラー内容（最新3件まで）", value=error_content, inline=False)
-    embed.add_field(name="● 起動経過時間", value=f"{hours}時間 {minutes}分 経過 ({start_str} 起動)", inline=False)
-    embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str}", inline=False)
-
-    await ctx.send(embed=embed)
-
-# ==========================================
-# 起動実行部
-# ==========================================
 if __name__ == "__main__":
     keep_alive()
     
