@@ -5,12 +5,21 @@ import random
 import threading
 import time
 import asyncio
+import discord
+from discord.ext import commands
+from discord import app_commands
 
 # 🛠️ サブシステム (sub.py) をインポート
 import sub
 
 # ==========================================
-# Flask (RenderやUptimeRobot等の死活監視用)
+# サーバーID設定 (即時同期用)
+# ==========================================
+# コマンドを即座に反映させるため、お使いのサーバーIDを指定します
+GUILD_ID = 1510042822533840936
+
+# ==========================================
+# Flask (死活監視用)
 # ==========================================
 try:
     from flask import Flask
@@ -47,15 +56,59 @@ def keep_alive():
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
 
-# ==========================================
-# Discord
-# ==========================================
-import discord
-from discord.ext import commands
-from discord import app_commands
 
+# ==========================================
+# カスタムBotクラス (discord.py v2 推奨構造)
+# ==========================================
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        """Bot起動時の初期化処理（確実に1回だけ安全に実行されます）"""
+        
+        # 1. ポイントデータの読み込み
+        print("🔄 [起動処理] ポイントデータを読み込み中...")
+        sub.load_points()
+
+        # 2. sub.py のコマンド・イベント登録
+        print("🔄 [起動処理] sub.py (ポイント・問い合わせ) の登録中...")
+        try:
+            sub.setup_admin_commands(self)
+            print("✅ [起動処理] sub.py の準備が完了しました。")
+        except Exception as e:
+            print(f"❌ [起動処理] sub.py 初期化エラー: {e}")
+
+        # 3. Quiz.py の読み込み・連携 (存在する場合)
+        print("🔄 [起動処理] Quiz.py の読み込み中...")
+        try:
+            import Quiz
+            if hasattr(Quiz, "setup_quiz_system"):
+                await Quiz.setup_quiz_system(self)
+            print("✅ [起動処理] Quiz.py の連携が完了しました。")
+        except ModuleNotFoundError:
+            print("⚠️ [起動処理] Quiz.py が見つかりませんでした。Quiz機能はスキップされます。")
+        except Exception as e:
+            print(f"❌ [起動処理] Quiz.py 連携エラー: {e}")
+
+        # 4. スラッシュコマンドのサーバー即時同期
+        print("⚡ [起動処理] スラッシュコマンドをサーバーへ同期中...")
+        try:
+            if GUILD_ID:
+                guild = discord.Object(id=GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                print(f"🚀 【即時反映成功】{len(synced)} 個のコマンドをサーバー(ID:{GUILD_ID})へ同期しました！")
+            else:
+                synced = await self.tree.sync()
+                print(f"🚀 {len(synced)} 個のコマンドをグローバル同期しました。")
+        except Exception as e:
+            print(f"❌ [同期エラー]: {e}")
+
+
+# ==========================================
+# Bot インスタンス化
+# ==========================================
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = MyBot(command_prefix="!", intents=intents)
+
 
 # ==========================================
 # JSON 永続化データ管理
@@ -90,7 +143,6 @@ def save_usage_data(data):
     except OSError:
         pass
 
-# 🔒 Quiz.py など外部モジュールからクールダウンを安全にリセットするための外部API関数
 def reset_user_cooldown(user_id: int, command_name: str = "create") -> bool:
     """指定ユーザーの特定コマンドのクールダウンを安全にリセットします"""
     try:
@@ -104,6 +156,7 @@ def reset_user_cooldown(user_id: int, command_name: str = "create") -> bool:
     except Exception as e:
         print(f"❌ [クールダウンリセットエラー]: {e}")
         return False
+
 
 # ==========================================
 # 権限・クールダウン設定
@@ -189,6 +242,7 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
     save_usage_data(usage_data)
     return True
 
+
 # ==========================================
 # 鉄道データ (路線・駅・所要時間)
 # ==========================================
@@ -219,6 +273,7 @@ ROUTE_TRAIN_TYPES = {
     },
     "井問線": {"普通": IDEMON_LOCAL, "快速": IDEMON_RAPID, "急行": IDEMON_EXPRESS}
 }
+
 
 # ==========================================
 # ダイヤ計算ロジック
@@ -301,6 +356,7 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
 
     return timetable, None
 
+
 # ==========================================
 # スラッシュコマンドの実装 (/create)
 # ==========================================
@@ -353,42 +409,19 @@ async def create_dia_command(
     embed.set_footer(text=f"管理ID: {train_id} | 設定者: {interaction.user.name}")
     await interaction.response.send_message(embed=embed)
 
+
 # ==========================================
-# 起動処理
+# イベントハンドラ
 # ==========================================
 @bot.event
 async def on_ready():
-    print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
-    
-    # 1. sub.py の初期化
-    print("🔄 [起動処理] sub.py (ポイント・問い合わせ) の初期化...")
-    try:
-        await sub.setup_sub_system(bot)
-        sub.setup_slash_commands(bot)
-        print("✅ [起動処理] sub.py の準備が完了しました。")
-    except Exception as e:
-        print(f"❌ [起動処理] sub.py 初期化エラー: {e}")
+    print(f"ログイン完了: {bot.user.name} (ID: {bot.user.id})")
+    print("Bot is fully operational!")
 
-    # 2. Quiz.py の読み込み・連携
-    print("🔄 [起動処理] Quiz.py の読み込み...")
-    try:
-        import Quiz
-        if hasattr(Quiz, "setup_quiz_system"):
-            await Quiz.setup_quiz_system(bot)
-        print("✅ [起動処理] Quiz.py の連携が完了しました。")
-    except ModuleNotFoundError:
-        print("⚠️ [起動処理] Quiz.py が見つかりませんでした。Quiz機能はスキップされます。")
-    except Exception as e:
-        print(f"❌ [起動処理] Quiz.py 連携エラー: {e}")
 
-    # 3. スラッシュコマンドの全体同期
-    print("⚡ [起動処理] 全コマンドをDiscordサーバーへ同期中...")
-    try:
-        synced = await bot.tree.sync()
-        print(f"🚀 {len(synced)} 個のコマンドを正常に同期しました。")
-    except Exception as e:
-        print(f"同期エラー: {e}")
-
+# ==========================================
+# メイン実行処理
+# ==========================================
 if __name__ == "__main__":
     keep_alive()
     
