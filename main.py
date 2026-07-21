@@ -64,9 +64,14 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         """Bot起動時の初期化処理（確実に1回だけ安全に実行されます）"""
         
-        # 1. ポイントデータの読み込み
+        # 1. ポイントデータの読み込み ＋ Discordチャンネルからの全自動復元
         print("🔄 [起動処理] ポイントデータを読み込み中...")
         sub.load_points()
+        try:
+            print("🔄 [起動処理] Discordログからポイントデータを復元・集計中...")
+            await sub.sync_points_from_discord(self)
+        except Exception as e:
+            print(f"❌ [起動処理] ポイント復元エラー: {e}")
 
         # 2. sub.py のコマンド・イベント登録
         print("🔄 [起動処理] sub.py (ポイント・問い合わせ) の登録中...")
