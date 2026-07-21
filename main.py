@@ -15,7 +15,6 @@ import sub
 # ==========================================
 # サーバーID設定 (即時同期用)
 # ==========================================
-# コマンドを即座に反映させるため、お使いのサーバーIDを指定します
 GUILD_ID = 1510021467155202048
 
 # ==========================================
@@ -23,38 +22,26 @@ GUILD_ID = 1510021467155202048
 # ==========================================
 try:
     from flask import Flask
+    app = Flask(__name__)
+
+    @app.route("/")
+    def home():
+        return "Bot is running"
+
+    @app.route("/health")
+    def health():
+        return "OK", 200
+
+    def run_flask():
+        app.run(host="0.0.0.0", port=8080)
+
+    def keep_alive():
+        t = threading.Thread(target=run_flask, daemon=True)
+        t.start()
 except ModuleNotFoundError:
-    class Flask:
-        def __init__(self, name):
-            self.name = name
-            self.routes = {}
-
-        def route(self, path):
-            def decorator(func):
-                self.routes[path] = func
-                return func
-            return decorator
-
-        def run(self, *args, **kwargs):
-            pass
-    print("警告: flask がインストールされていないため、ダミーを使用します。")
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot is running"
-
-@app.route("/health")
-def health():
-    return "OK", 200
-
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
-
-def keep_alive():
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
+    print("⚠️ 警告: flask がインストールされていないため、死活監視サーバーはスキップされます。")
+    def keep_alive():
+        pass
 
 
 # ==========================================
@@ -104,6 +91,11 @@ class MyBot(commands.Bot):
             else:
                 synced = await self.tree.sync()
                 print(f"🚀 {len(synced)} 個のコマンドをグローバル同期しました。")
+            
+            # クイズ等、別モジュールで追加のツリー同期が必要な場合の安全策
+            if 'Quiz' in sys.modules and hasattr(Quiz, "sync_quiz_commands"):
+                await Quiz.sync_quiz_commands(self, GUILD_ID)
+
         except Exception as e:
             print(f"❌ [同期エラー]: {e}")
 
@@ -121,32 +113,34 @@ bot = MyBot(command_prefix="!", intents=intents)
 DATA_FILE = "trains.json"
 USAGE_FILE = "usage.json"
 
+def load_json_safe(file_path: str, default_factory=dict):
+    if not os.path.exists(file_path):
+        return default_factory()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"⚠️ [JSON読み込みエラー] {file_path}: {e}")
+        return default_factory()
+
+def save_json_safe(file_path: str, data):
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except OSError as e:
+        print(f"❌ [JSON保存エラー] {file_path}: {e}")
+
 def load_trains():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f)
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_json_safe(DATA_FILE)
 
 def save_trains(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    save_json_safe(DATA_FILE, data)
 
 def load_usage_data():
-    if not os.path.exists(USAGE_FILE):
-        return {}
-    try:
-        with open(USAGE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json_safe(USAGE_FILE)
 
 def save_usage_data(data):
-    try:
-        with open(USAGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except OSError:
-        pass
+    save_json_safe(USAGE_FILE, data)
 
 def reset_user_cooldown(user_id: int, command_name: str = "create") -> bool:
     """指定ユーザーの特定コマンドのクールダウンを安全にリセットします"""
@@ -156,7 +150,6 @@ def reset_user_cooldown(user_id: int, command_name: str = "create") -> bool:
         if user_id_str in usage_data and command_name in usage_data[user_id_str]:
             usage_data[user_id_str][command_name] = []
             save_usage_data(usage_data)
-            return True
         return True
     except Exception as e:
         print(f"❌ [クールダウンリセットエラー]: {e}")
@@ -197,7 +190,7 @@ COMMAND_RULES = {
     }
 }
 
-def format_remaining_time(seconds):
+def format_remaining_time(seconds: int) -> str:
     if seconds <= 0:
         return "0時間0分"
     hours = seconds // 3600
@@ -213,11 +206,10 @@ async def check_command_permission(interaction: discord.Interaction, command_nam
         await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
         return False
 
-    user_roles = [getattr(role, "id", None) for role in getattr(interaction.user, "roles", [])]
-    if ADMIN_ROLE_ID in user_roles:
+    user_roles = [role.id for role in getattr(interaction.user, "roles", [])]
+    if ADMIN_ROLE_ID in user_roles or any(role_id in rules["unlimited_roles"] for role_id in user_roles):
         return True
-    if any(role_id in rules["unlimited_roles"] for role_id in user_roles):
-        return True
+        
     if not any(role_id in rules["limited_roles"] for role_id in user_roles):
         await interaction.response.send_message("このコマンドを使用する権限がありません。", ephemeral=True)
         return False
@@ -295,24 +287,28 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
     if route_name not in ROUTE_STATIONS:
         return None, "未実装の路線です"
     if train_type not in ROUTE_TRAIN_TYPES[route_name]:
-        return None, "その種別はありません"
+        return None, f"「{route_name}」に「{train_type}」種別は存在しません"
 
     stations = ROUTE_STATIONS[route_name]
     if start_station not in stations: 
-        return None, "開始駅が存在しません"
+        return None, f"「{start_station}」は{route_name}に存在しません"
     if end_station not in stations: 
-        return None, "終了駅が存在しません"
+        return None, f"「{end_station}」は{route_name}に存在しません"
 
     stops = get_stops(route_name, train_type)
     if start_station not in stops: 
-        return None, "開始駅は停車駅ではありません"
+        return None, f"「{start_station}」は{train_type}の停車駅ではありません"
     if end_station not in stops: 
-        return None, "終了駅は停車駅ではありません"
+        return None, f"「{end_station}」は{train_type}の停車駅ではありません"
 
     try:
+        # 時刻指定が "9:05" などの場合も考慮して補正
+        parts = start_time_str.split(":")
+        if len(parts) == 2:
+            start_time_str = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
         base_time = datetime.strptime(start_time_str, "%H:%M")
     except ValueError:
-        return None, "時刻の形式が不正です (HH:MM で指定してください)"
+        return None, "時刻の形式が不正です (例: 12:00 や 09:30 で指定してください)"
 
     start_idx = stations.index(start_station)
     end_idx = stations.index(end_station)
@@ -356,7 +352,7 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
                         "dep": dep_time.strftime("%H:%M")
                     })
                     current_time = dep_time
-        
+            
         current_idx = next_idx
 
     return timetable, None
@@ -372,6 +368,13 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
     始発駅="列車の出発駅",
     終着駅="列車の終点駅",
     始発時刻="出発時刻 (例: 12:00)"
+)
+@app_commands.choices(
+    路線=[
+        app_commands.Choice(name="尾羽急本線", value="尾羽急本線"),
+        app_commands.Choice(name="空港線", value="空港線"),
+        app_commands.Choice(name="井問線", value="井問線"),
+    ]
 )
 async def create_dia_command(
     interaction: discord.Interaction,
@@ -399,7 +402,12 @@ async def create_dia_command(
     for stop in timetable:
         schedule_text += f"**{stop['station']}駅** - 着 {stop['arr']} / 発 {stop['dep']}\n"
 
-    embed.add_field(name="時刻表", value=schedule_text, inline=False)
+    # Embedの文字数制限対策（文字数が長すぎる場合は分割）
+    if len(schedule_text) > 1024:
+        embed.add_field(name="時刻表 (1)", value=schedule_text[:1000], inline=False)
+        embed.add_field(name="時刻表 (2)", value=schedule_text[1000:], inline=False)
+    else:
+        embed.add_field(name="時刻表", value=schedule_text, inline=False)
     
     train_data = load_trains()
     train_id = f"TRN-{random.randint(1000, 9999)}"
