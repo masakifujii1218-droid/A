@@ -30,7 +30,7 @@ POINTS_FILE = os.path.join(BASE_DIR, "points.json")
 points_data = {}
 
 # ==========================================
-# ポイントデータ管理関数（リアルタイム保存のみ）
+# ポイントデータ管理関数（リアルタイム保存・復元）
 # ==========================================
 def load_points():
     global points_data
@@ -40,7 +40,7 @@ def load_points():
         try:
             with open(POINTS_FILE, "r", encoding="utf-8") as f:
                 points_data = json.load(f)
-                print("【システム】ポイントデータを読み込みました。")
+                print("【システム】ポイントデータを正常に復元・読み込みました。")
                 return
         except Exception as e:
             print(f"データ読み込み失敗: {e}")
@@ -238,6 +238,12 @@ class SupportClaimView(discord.ui.View):
 # Modmail コアロジック (イベント処理)
 # ==========================================
 def setup_modmail_events(bot: commands.Bot):
+
+    # 起動時にポイントを自動復元するイベントを追加
+    @bot.event
+    async def on_ready():
+        load_points()
+        print(f"【システム】ログイン完了: {bot.user} (ID: {bot.user.id})")
 
     @bot.event
     async def on_message(message: discord.Message):
