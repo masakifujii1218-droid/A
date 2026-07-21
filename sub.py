@@ -2,7 +2,7 @@
 # sub.py (Modmailシステム + ポイントシステム)
 # ==========================================
 import discord
-from discord.ext import commands  # 不要な tasks のインポートを削除
+from discord.ext import commands  # 不要な tasks のインポートを削除
 from discord import app_commands
 import asyncio
 from datetime import datetime
