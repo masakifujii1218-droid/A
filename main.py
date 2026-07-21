@@ -435,44 +435,6 @@ async def quiz_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
-# 起動処理
-# ==========================================
-@bot.event
-async def on_ready():
-    print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
-    
-    # ------------------------------------------
-    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
-    # ------------------------------------------
-    print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
-    try:
-        await sub.setup_sub_system(bot)
-        print("✅ [起動処理] データベースの初期同期が完了しました。")
-    except Exception as e:
-        print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
-
-    print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
-    sub.setup_slash_commands(bot)
-    # ------------------------------------------
-    # 🛠️ ここまで
-    # ------------------------------------------
-
-    print("⚡ [起動処理] 全コマンドをDiscordサーバー側へ同期中...")
-    try:
-        synced = await bot.tree.sync()
-        print(f"🚀 {len(synced)} 個のコマンドを同期しました。(すべての機能が有効です)")
-    except Exception as e:
-        print(f"同期エラー: {e}")
-
-if __name__ == "__main__":
-    keep_alive()
-    
-    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
-# ==========================================
 # 🛠️ BOT管理部専用 !botinfo コマンド (完全追加分)
 # ==========================================
 import psutil
@@ -541,3 +503,42 @@ async def botinfo_command(ctx):
     embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str} (リアルタイム)", inline=False)
 
     await ctx.send(embed=embed)
+
+# ==========================================
+# 起動処理
+# ==========================================
+@bot.event
+async def on_ready():
+    print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
+    
+    # ------------------------------------------
+    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
+    # ------------------------------------------
+    print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
+    try:
+        await sub.setup_sub_system(bot)
+        print("✅ [起動処理] データベースの初期同期が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
+
+    print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
+    sub.setup_slash_commands(bot)
+    # ------------------------------------------
+    # 🛠️ ここまで
+    # ------------------------------------------
+
+    print("⚡ [起動処理] 全コマンドをDiscordサーバー側へ同期中...")
+    try:
+        synced = await bot.tree.sync()
+        print(f"🚀 {len(synced)} 個のコマンドを同期しました。(すべての機能が有効です)")
+    except Exception as e:
+        print(f"同期エラー: {e}")
+
+if __name__ == "__main__":
+    keep_alive()
+    
+    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
