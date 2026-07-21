@@ -58,6 +58,9 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 💡【修正ポイント】sub.py のスラッシュコマンドは Bot 起動前のここで登録しておきます！
+sub.setup_slash_commands(bot)
+
 # ==========================================
 # JSON 永続化データ管理
 # ==========================================
@@ -321,14 +324,12 @@ class QuizView(discord.ui.View):
         self.quiz_data = quiz_data
         self.user_id = user_id
 
-        # 4つの選択肢に対応するボタンを動的に配置
         for choice in self.quiz_data["choices"]:
             button = discord.ui.Button(label=choice, style=discord.ButtonStyle.primary, custom_id=choice)
             button.callback = self.on_button_click
             self.add_item(button)
 
     async def on_button_click(self, interaction: discord.Interaction):
-        # 回答者本人以外の入力を無視
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("これはあなたのクイズではありません！", ephemeral=True)
             return
@@ -336,16 +337,13 @@ class QuizView(discord.ui.View):
         selected_answer = interaction.data["custom_id"]
         correct_answer = self.quiz_data["answer"]
 
-        # 全てのボタンを無効化
         for item in self.children:
             item.disabled = True
 
         if selected_answer == correct_answer:
-            # 【クールダウンリセット連携】
             usage_data = load_usage_data()
             user_id_str = str(interaction.user.id)
             if user_id_str in usage_data:
-                # create コマンドの履歴（クールダウン）を完全にリセット
                 if "create" in usage_data[user_id_str]:
                     usage_data[user_id_str]["create"] = []
                 save_usage_data(usage_data)
@@ -442,7 +440,7 @@ async def on_ready():
     print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
     
     # ------------------------------------------
-    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
+    # 🛠️ sub.py (ポイント・チケット) のドッキング処理
     # ------------------------------------------
     print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
     try:
@@ -451,12 +449,7 @@ async def on_ready():
     except Exception as e:
         print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
 
-    print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
-    sub.setup_slash_commands(bot)
-    # ------------------------------------------
-    # 🛠️ ここまで
-    # ------------------------------------------
-
+    # 💡 コマンドの登録自体は起動前（関数外）で行われているので、ここでは同期(sync)だけ実行します
     print("⚡ [起動処理] 全コマンドをDiscordサーバー側へ同期中...")
     try:
         synced = await bot.tree.sync()
@@ -469,15 +462,12 @@ async def on_ready():
 # ==========================================
 import psutil
 
-# 許可された管理部の【ロールID】リスト
 ADMIN_ROLE_IDS = [1528521149582151751, 1510021467167789104]
 
-# エラーログと起動時間・オンライン時間の初期化
 error_logs = []
 bot_start_time = time.time()
 bot_last_online_time = time.time()
 
-# 他の処理を邪魔しない独立したエラーキャッチ
 @bot.event
 async def on_error(event, *args, **kwargs):
     import traceback
@@ -489,19 +479,16 @@ async def on_error(event, *args, **kwargs):
 
 @bot.command(name="botinfo")
 async def botinfo_command(ctx):
-    # DM（ダイレクトメッセージ）での実行を防ぐ
     if ctx.guild is None:
         return
 
-    # ロール ID チェック（所持しているロールの中に管理部IDがあるか判定）
     user_role_ids = [role.id for role in ctx.author.roles]
     if not any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids):
-        return  # ロールを持っていない場合は無反応でスルー
+        return
 
     global bot_last_online_time
-    bot_last_online_time = time.time()  # コマンドが動作した時刻を記録
+    bot_last_online_time = time.time()
 
-    # 各種ステータスの計算
     ping = round(bot.latency * 1000) if bot.latency is not None else 0
     
     process = psutil.Process(os.getpid())
@@ -532,7 +519,6 @@ async def botinfo_command(ctx):
     embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str} (リアルタイム)", inline=False)
 
     await ctx.send(embed=embed)
-
 
 # ==========================================
 # 起動実行部（⚠️必ずこのファイルの最後にあること！）
