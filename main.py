@@ -58,7 +58,7 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 💡【修正ポイント】sub.py のスラッシュコマンドは Bot 起動前のここで登録しておきます！
+# 💡 スラッシュコマンドの登録関数を定義
 sub.setup_slash_commands(bot)
 
 # ==========================================
@@ -444,12 +444,12 @@ async def on_ready():
     # ------------------------------------------
     print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
     try:
-        await sub.setup_sub_system(bot)
-        print("✅ [起動処理] データベースの初期同期が完了しました。")
+        if hasattr(sub, "setup_sub_system"):
+            await sub.setup_sub_system(bot)
+            print("✅ [起動処理] データベースの初期同期が完了しました。")
     except Exception as e:
         print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
 
-    # 💡 コマンドの登録自体は起動前（関数外）で行われているので、ここでは同期(sync)だけ実行します
     print("⚡ [起動処理] 全コマンドをDiscordサーバー側へ同期中...")
     try:
         synced = await bot.tree.sync()
@@ -521,7 +521,7 @@ async def botinfo_command(ctx):
     await ctx.send(embed=embed)
 
 # ==========================================
-# 起動実行部（⚠️必ずこのファイルの最後にあること！）
+# 起動実行部
 # ==========================================
 if __name__ == "__main__":
     keep_alive()
