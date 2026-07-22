@@ -435,12 +435,12 @@ async def quiz_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
-# 🛠️ BOT管理部専用 !botinfo コマンド (完全追加分)
+# 🛠️ BOT管理部専用 !botinfo コマンド
 # ==========================================
 import psutil
 
-# 許可された管理部のユーザーIDリスト
-ADMIN_USER_IDS = [1528521149582151751, 1510021467167789104]
+# 許可された管理部のロールIDリスト
+ADMIN_ROLE_IDS = [1510021467167789104, 1528521149582151751]
 
 # エラーログと起動時間・オンライン時間の初期化
 error_logs = []
@@ -459,8 +459,12 @@ async def on_error(event, *args, **kwargs):
 
 @bot.command(name="botinfo")
 async def botinfo_command(ctx):
-    # 1. 権限チェック（IDが一致しない場合は完全に無視）
-    if ctx.author.id not in ADMIN_USER_IDS:
+    # 1. 権限チェック（実行者のロールIDリスト内に許可されたロールIDが含まれているかチェック）
+    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+    has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
+
+    if not has_permission:
+        # ロールを持っていない場合は無視して処理終了
         return
 
     global bot_last_online_time
