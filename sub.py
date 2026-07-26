@@ -666,6 +666,77 @@ def setup_modmail_events(bot: commands.Bot):
 
         # 他のプレフィックスコマンド（!kabu や !sendmessage など）を正しく実行させる処理
         await bot.process_commands(message)
+import asyncio
+import io
+import random
+from datetime import datetime
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+
+# ==========================================
+# 📈 株式価格の自動更新タスク (1時間周期)
+# ==========================================
+@tasks.loop(hours=1)
+async def stock_price_update_task(bot: commands.Bot):
+    """
+    1時間ごとに株価を更新するバックグラウンドタスク
+    - 1%  : 超大暴騰 (+200%)
+    - 10% : 大高騰 (+30.0% 〜 +60.0%)
+    - 39% : 通常上昇 (+1.0% 〜 +30.0%)
+    - 50% : 下落 (-1.0% 〜 -15.0%)
+    - 購入価格/売却価格は 1の位で四捨五入 (round)
+    """
+    if not stocks_db:
+        return
+
+    for cid, data in stocks_db.items():
+        # アクティブ（販売中）でない銘柄も価格変動は計算（または active のみ限定も可能）
+        current_price = data["buy_price"]
+        
+        # 過去3日の履歴更新 (最新の購入価格を履歴に追加し、直近3日分を維持)
+        if "history" not in data:
+            data["history"] = [current_price, current_price, current_price]
+        
+        # 履歴を1つ進める
+        data["history"].append(current_price)
+        if len(data["history"]) > 3:
+            data["history"].pop(0)
+
+        # 🎲 確率判定
+        rand_val = random.random()  # 0.0 ~ 1.0
+
+        if rand_val < 0.01:
+            # 💣 超大暴騰 (1%) : +200%（3倍）
+            rate = 2.00
+        elif rand_val < 0.11:
+            # 🚀 大高騰 (10%) : +30.0% 〜 +60.0%
+            rate = random.uniform(0.30, 0.60)
+        elif rand_val < 0.50:
+            # 📈 通常上昇 (39%) : +1.0% 〜 +30.0%
+            rate = random.uniform(0.01, 0.30)
+        else:
+            # 📉 下落 (50%) : -1.0% 〜 -15.0%
+            rate = random.uniform(-0.15, -0.01)
+
+        # 新しい購入価格の計算（1の位で四捨五入）
+        new_buy_price = round(current_price * (1 + rate))
+        
+        # 最低価格は 1 pt に設定
+        if new_buy_price < 1:
+            new_buy_price = 1
+
+        # 新しい売却価格（買取レート）：購入価格の 90%（1の位で四捨五入）
+        new_sell_price = round(new_buy_price * 0.90)
+        if new_sell_price < 1:
+            new_sell_price = 1
+
+        # データベース更新
+        data["buy_price"] = new_buy_price
+        data["sell_price"] = new_sell_price
+
+    # 株式データの保存処理がある場合はここで呼び出し
+    # save_stocks_db()
 
 
 # ==========================================
@@ -675,6 +746,10 @@ def setup_slash_commands(bot: commands.Bot):
     load_points()
     asyncio.create_task(sync_points_from_discord(bot))
     setup_modmail_events(bot)
+
+    # 📈 株価自動更新タスクの開始 (重複実行防止)
+    if not stock_price_update_task.is_running():
+        stock_price_update_task.start(bot)
 
     # ------------------------------------------
     # 👑 1. 管理者専用 プレフィックスコマンド (!)
@@ -1135,11 +1210,13 @@ def setup_slash_commands(bot: commands.Bot):
 
         market_lines = []
         for cid, data in stocks_db.items():
-            yesterday_p = data["history"][-1]
+            yesterday_p = data["history"][-1] if data.get("history") else data["buy_price"]
             diff = data["buy_price"] - yesterday_p
             pct = (diff / yesterday_p) * 100 if yesterday_p > 0 else 0
             diff_str = f"🔺+{diff:,}pt (+{pct:.1f}%)" if diff > 0 else (f"🔻{diff:,}pt ({pct:.1f}%)" if diff < 0 else "➖ 変化なし")
-            history_str = " ➔ ".join([f"{p:,}pt" for p in data["history"]]) + f" ➔ **{data['buy_price']:,}pt**"
+            
+            history_list = data.get("history", [data["buy_price"]])
+            history_str = " ➔ ".join([f"{p:,}pt" for p in history_list]) + f" ➔ **{data['buy_price']:,}pt**"
             status_str = "🟢 販売中" if data["is_active"] else "🔴 販売停止中"
 
             market_lines.append(
