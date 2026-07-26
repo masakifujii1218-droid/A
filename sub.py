@@ -666,13 +666,6 @@ def setup_modmail_events(bot: commands.Bot):
 
         # 他のプレフィックスコマンド（!kabu や !sendmessage など）を正しく実行させる処理
         await bot.process_commands(message)
-import asyncio
-import io
-import random
-from datetime import datetime
-import discord
-from discord import app_commands
-from discord.ext import commands, tasks
 
 # ==========================================
 # 📈 株式価格の自動更新タスク (1時間周期)
