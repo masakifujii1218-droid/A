@@ -1247,3 +1247,142 @@ def setup_slash_commands(bot: commands.Bot):
 
     # Botツリーに `/kabu` グループを追加
     bot.tree.add_command(kabu_group)
+
+# ------------------------------------------
+# 🎰 スロットのViewとModal（setup_slash_commandsの外側・ファイルの一番下に追加）
+# ------------------------------------------
+
+class SlotBetModal(discord.ui.Modal, title="🎰 賭けポイントの設定"):
+    bet_input = discord.ui.TextInput(
+        label="賭けるポイント数を入力してください",
+        placeholder="例: 100",
+        min_length=1,
+        max_length=10,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            bet_amount = int(self.bet_input.value)
+            if bet_amount <= 0:
+                await interaction.response.send_message("❌ 1ポイント以上を指定してください。", ephemeral=True)
+                return
+        except ValueError:
+            await interaction.response.send_message("❌ 半角数字で有効な数値を入力してください。", ephemeral=True)
+            return
+
+        user_data = get_user_data(str(interaction.user.id))
+        if user_data["points"] < bet_amount:
+            await interaction.response.send_message(f"❌ ポイントが不足しています。（現在の所持: {user_data['points']:,} pt）", ephemeral=True)
+            return
+
+        view: SlotMainView = self.view
+        view.user_bets[interaction.user.id] = bet_amount
+
+        await interaction.response.send_message(
+            f"✅ 賭けポイントを **{bet_amount:,} pt** に設定しました！\n「🎰 スロットスタート」ボタンを押してゲームを開始してください。",
+            ephemeral=True
+        )
+
+
+class SlotMainView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.user_bets = {}
+        self.jp_chance = {}
+
+    @discord.ui.button(label="🪙 賭けるポイントを設定", style=discord.ButtonStyle.primary, custom_id="slot_set_bet")
+    async def set_bet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = SlotBetModal()
+        modal.view = self
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="🎰 スロットスタート", style=discord.ButtonStyle.success, custom_id="slot_start")
+    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        bet_amount = self.user_bets.get(user_id, 0)
+
+        if bet_amount <= 0:
+            await interaction.response.send_message("❌ 先に「🪙 賭けるポイントを設定」ボタンから賭けポイントを設定してください。", ephemeral=True)
+            return
+
+        user_id_str = str(user_id)
+        user_data = get_user_data(user_id_str)
+
+        if user_data["points"] < bet_amount:
+            await interaction.response.send_message(f"❌ ポイントが不足しています。（現在の所持: {user_data['points']:,} pt）", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        symbols = ["🇯🇵", "🇺🇸", "💎", "🔔", "🚃"]
+        reel = [random.choice(symbols) for _ in range(3)]
+        reel_str = f"|  {reel[0]}  |  {reel[1]}  |  {reel[2]}  |"
+
+        symbol_counts = {s: reel.count(s) for s in set(reel)}
+        max_count = max(symbol_counts.values())
+
+        payout_multiplier = 0
+        result_title = ""
+        result_color = discord.Color.red()
+        jp_message = ""
+
+        is_in_jp_chance = self.jp_chance.get(user_id, False)
+
+        if max_count == 3:
+            if is_in_jp_chance:
+                payout_multiplier = 20
+                result_title = "🎉💎 JACKPOT (2回連続3つ揃い)!! 💎🎉"
+                result_color = discord.Color.gold()
+                jp_message = "🔥 **超大暴走！2回連続3つ揃いでジャックポット獲得！！**"
+                self.jp_chance[user_id] = False
+            else:
+                payout_multiplier = 5
+                result_title = "🎊 3つ揃い！ 大勝利！ 🎊"
+                result_color = discord.Color.green()
+                jp_message = "⚡ **JACKPOT CHANCE発動！** 次回も3つ揃いが出れば **20倍**！！"
+                self.jp_chance[user_id] = True
+        elif max_count == 2:
+            payout_multiplier = 2
+            result_title = "✨ 2つ揃い！ WIN! ✨"
+            result_color = discord.Color.blue()
+            if is_in_jp_chance:
+                jp_message = "※ジャックポットチャンスは失敗しました。"
+            self.jp_chance[user_id] = False
+        else:
+            payout_multiplier = 0
+            result_title = "💀 残念... 没収！ 💀"
+            result_color = discord.Color.dark_gray()
+            if is_in_jp_chance:
+                jp_message = "※ジャックポットチャンスは失敗しました。"
+            self.jp_chance[user_id] = False
+
+        payout_points = bet_amount * payout_multiplier
+        net_change = payout_points - bet_amount
+        new_points = user_data["points"] + net_change
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if net_change > 0:
+            log_entry = f"[{now_str}] 🎰 スロット勝利 (+{net_change:,} pt / {reel[0]}{reel[1]}{reel[2]})"
+        elif net_change < 0:
+            log_entry = f"[{now_str}] 🎰 スロット敗北 ({net_change:,} pt / {reel[0]}{reel[1]}{reel[2]})"
+        else:
+            log_entry = f"[{now_str}] 🎰 スロット引き分け (±0 pt / {reel[0]}{reel[1]}{reel[2]})"
+
+        update_user_data(user_id_str, new_points, log_entry)
+
+        desc = f"### 🎰 【 {reel_str} 】 🎰\n\n"
+        if jp_message:
+            desc += f"{jp_message}\n\n"
+
+        res_embed = discord.Embed(
+            title=result_title,
+            description=desc,
+            color=result_color,
+            timestamp=datetime.now()
+        )
+        res_embed.add_field(name="賭けポイント", value=f"`{bet_amount:,} pt`", inline=True)
+        res_embed.add_field(name="獲得ポイント", value=f"`{payout_points:,} pt` (倍率: {payout_multiplier}倍)", inline=True)
+        res_embed.add_field(name="現在の総保有", value=f"`{new_points:,} pt`", inline=False)
+
+        await interaction.followup.send(content=interaction.user.mention, embed=res_embed)
