@@ -11,11 +11,11 @@ from datetime import datetime
 # ==========================================
 # ⚙️ 定数・設定値
 # ==========================================
-ADMIN_ROLE_ID_POINTS = 123456789012345678  # 管理者ロールIDに置き換えてください
-WORK_ROLE_ID = 123456789012345678          # お仕事コマンド実行可能ロールID
-INBOX_CATEGORY_ID = 123456789012345678     # Modmail受信カテゴリーID
-LOG_CHANNEL_ID = 123456789012345678        # チケットログ出力用チャンネルID
-POINT_DATABASE_CHANNEL_ID = 123456789012345678 # ポイントデータベースログチャンネルID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900  # 管理者ロールIDに置き換えてください
+WORK_ROLE_ID = 1510021467155202057          # お仕事コマンド実行可能ロールID
+INBOX_CATEGORY_ID = 1513901626610553043     # Modmail受信カテゴリーID
+LOG_CHANNEL_ID = 1513901627415855256        # チケットログ出力用チャンネルID
+POINT_DATABASE_CHANNEL_ID = 1527164312634920980 # ポイントデータベースログチャンネルID
 
 # 📈 株式データベースログ用チャンネルID（保存・復元の参照先）
 STOCK_DATABASE_CHANNEL_ID = 1527164312634920980
