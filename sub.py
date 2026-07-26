@@ -1,5 +1,5 @@
 # ==========================================
-# sub.py (Modmailシステム + ポイントシステム)
+# sub.py (Modmailシステム + ポイントシステム + 株式システム)
 # ==========================================
 import discord
 from discord.ext import commands
@@ -17,10 +17,9 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v7.2.1 (Point Database Sync)"
+VERSION = "v8.0.0 (Kabu & Sendmessage Integrated)"
 
 # --- ポイントシステム用設定 ---
-# 💡 指定していただいたデータベース用チャンネルIDを設定しました！
 POINT_DATABASE_CHANNEL_ID = 1527164312634920980  
 WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
 ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
@@ -29,6 +28,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POINTS_FILE = os.path.join(BASE_DIR, "points.json")
 
 points_data = {}
+
+# ==========================================
+# 📈 株式システム データ構造定義
+# ==========================================
+stocks_db = {
+    "dia_corp": {
+        "name": "ダイヤ鉱業",
+        "buy_price": 100,
+        "sell_price": 80,
+        "stock": 1000,
+        "is_active": True,
+        "history": [80, 90, 100]
+    }
+}
+user_stocks = {}  # { user_id_str: { company_id: amount } }
 
 # ==========================================
 # 💎 Discordチャンネルからポイントを自動復元・同期する関数
@@ -45,18 +59,14 @@ async def sync_points_from_discord(bot: commands.Bot):
             print(f"【エラー】同期対象のチャンネルが見つかりません: {e}")
             return
 
-    # 一時的にデータをリセットして、古い順からログを追体験して再構築する
     temp_data = {}
     count = 0
 
-    # 過去のメッセージを古い順（oldest_first=True）に取得して解析
     async for message in channel.history(limit=5000, oldest_first=True):
-        # Bot自身の埋め込みメッセージのみを対象とする
         if message.author.id != bot.user.id or not message.embeds:
             continue
         
         embed = message.embeds[0]
-        # 変動通知（付与、消費、仕事など）を解析
         if embed.title and "ポイント変動通知" in embed.title:
             target_field = None
             change_field = None
@@ -71,7 +81,6 @@ async def sync_points_from_discord(bot: commands.Bot):
                     reason_field = field.value
 
             if target_field and change_field:
-                # ユーザーIDをクリーン（メンションや文字列から数字のみ抽出）
                 user_id_str = "".join(filter(str.isdigit, target_field))
                 try:
                     change_amount = int(change_field.replace(" pt", "").replace("+", "").replace(" ", ""))
@@ -81,10 +90,8 @@ async def sync_points_from_discord(bot: commands.Bot):
                 if user_id_str not in temp_data:
                     temp_data[user_id_str] = {"points": 0, "logs": []}
 
-                # ポイントを合算・計算
                 temp_data[user_id_str]["points"] += change_amount
                 
-                # 履歴用ログを復元
                 time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
                 sign = "+" if change_amount >= 0 else ""
                 emoji = "🪙" if change_amount >= 0 else "💸"
@@ -132,6 +139,279 @@ def update_user_data(user_id: str, points: int, log_entry: str):
     points_data[user_id]["points"] = points
     points_data[user_id]["logs"].append(log_entry)
     save_points()
+
+
+# ==========================================
+# 📊 [株システム] 管理者用 モーダル & View (!kabu)
+# ==========================================
+class AdminCreateCompanyModal(discord.ui.Modal):
+    def __init__(self): super().__init__(title="🏢 新規会社の設立")
+    c_id = discord.ui.TextInput(label="会社ID（識別用英数字）", placeholder="例: nintendo", required=True)
+    c_name = discord.ui.TextInput(label="会社名", placeholder="例: 任天堂", required=True)
+    c_buy_p = discord.ui.TextInput(label="販売価格(購入pt)", placeholder="例: 100", required=True)
+    c_sell_p = discord.ui.TextInput(label="買取価格(売却pt)", placeholder="例: 80", required=True)
+    c_stock = discord.ui.TextInput(label="初期発行株数", placeholder="例: 1000", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            cid = self.c_id.value.strip().lower()
+            buy_p = int(self.c_buy_p.value)
+            sell_p = int(self.c_sell_p.value)
+            stock = int(self.c_stock.value)
+            if buy_p <= 0 or sell_p <= 0 or stock <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 正の整数を入力してください。", ephemeral=True)
+            return
+
+        stocks_db[cid] = {
+            "name": self.c_name.value,
+            "buy_price": buy_p,
+            "sell_price": sell_p,
+            "stock": stock,
+            "is_active": True,
+            "history": [buy_p, buy_p, buy_p]
+        }
+        await interaction.response.send_message(f"✅ 会社 **{self.c_name.value}**（ID: `{cid}`）を作成しました！", ephemeral=True)
+
+class AdminUpdatePriceModal(discord.ui.Modal):
+    def __init__(self): super().__init__(title="✏️ 株価（購入・売却価格）の手動変更")
+    c_id = discord.ui.TextInput(label="対象の会社ID", placeholder="例: dia_corp", required=True)
+    new_buy = discord.ui.TextInput(label="新しい【購入価格】(pt)", placeholder="例: 120", required=True)
+    new_sell = discord.ui.TextInput(label="新しい【売却価格】(pt)", placeholder="例: 100", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        cid = self.c_id.value.strip().lower()
+        if cid not in stocks_db:
+            await interaction.response.send_message("❌ 指定された会社IDが存在しません。", ephemeral=True)
+            return
+
+        try:
+            b_p = int(self.new_buy.value)
+            s_p = int(self.new_sell.value)
+            if b_p <= 0 or s_p <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 正の整数を入力してください。", ephemeral=True)
+            return
+
+        comp = stocks_db[cid]
+        comp["history"].pop(0)
+        comp["history"].append(comp["buy_price"])
+        comp["buy_price"] = b_p
+        comp["sell_price"] = s_p
+
+        await interaction.response.send_message(f"⚙️ **{comp['name']}** の価格を更新しました！\n• 購入価格: `{b_p:,} pt`\n• 売却価格: `{s_p:,} pt`", ephemeral=True)
+
+class AdminToggleStatusModal(discord.ui.Modal):
+    def __init__(self): super().__init__(title="🛑 販売開始 / 停止切り替え")
+    c_id = discord.ui.TextInput(label="対象の会社ID", placeholder="例: dia_corp", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        cid = self.c_id.value.strip().lower()
+        if cid not in stocks_db:
+            await interaction.response.send_message("❌ 指定された会社IDが存在しません。", ephemeral=True)
+            return
+
+        comp = stocks_db[cid]
+        comp["is_active"] = not comp["is_active"]
+        status_str = "🟢 販売中" if comp["is_active"] else "🔴 販売停止中"
+        await interaction.response.send_message(f"⚙️ **{comp['name']}** のステータスを **{status_str}** に切り替えました。", ephemeral=True)
+
+class AdminDeleteCompanyModal(discord.ui.Modal):
+    def __init__(self): super().__init__(title="🗑️ 会社の削除")
+    c_id = discord.ui.TextInput(label="削除する会社ID", placeholder="例: dia_corp", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        cid = self.c_id.value.strip().lower()
+        if cid not in stocks_db:
+            await interaction.response.send_message("❌ 指定された会社IDが存在しません。", ephemeral=True)
+            return
+
+        comp_name = stocks_db[cid]["name"]
+        del stocks_db[cid]
+        await interaction.response.send_message(f"🗑️ 会社 **{comp_name}**（ID: `{cid}`）を完全削除しました。", ephemeral=True)
+
+class AdminKabuPanelView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+
+    @discord.ui.button(label="➕ 会社設立", style=discord.ButtonStyle.success)
+    async def create_comp(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            await interaction.response.send_message("❌ 管理者権限がありません。", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdminCreateCompanyModal())
+
+    @discord.ui.button(label="✏️ 株価手動設定", style=discord.ButtonStyle.primary)
+    async def update_price(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            await interaction.response.send_message("❌ 管理者権限がありません。", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdminUpdatePriceModal())
+
+    @discord.ui.button(label="🛑 販売開始/停止", style=discord.ButtonStyle.secondary)
+    async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            await interaction.response.send_message("❌ 管理者権限がありません。", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdminToggleStatusModal())
+
+    @discord.ui.button(label="🗑️ 会社削除", style=discord.ButtonStyle.danger)
+    async def delete_comp(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in interaction.user.roles):
+            await interaction.response.send_message("❌ 管理者権限がありません。", ephemeral=True)
+            return
+        await interaction.response.send_modal(AdminDeleteCompanyModal())
+
+
+# ==========================================
+# 🛒 [株システム] メンバー用 モーダル & セレクトView (/kabu)
+# ==========================================
+class UserBuyModal(discord.ui.Modal):
+    def __init__(self, company_id: str):
+        comp = stocks_db[company_id]
+        super().__init__(title=f"📈 {comp['name']} の株を購入")
+        self.company_id = company_id
+
+    amount_input = discord.ui.TextInput(label="購入株数", placeholder="例: 10", required=True, max_length=6)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        comp = stocks_db.get(self.company_id)
+        if not comp or not comp["is_active"]:
+            await interaction.response.send_message("❌ この株は現在取引できません。", ephemeral=True)
+            return
+
+        try:
+            amount = int(self.amount_input.value)
+            if amount <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 正の整数を入力してください。", ephemeral=True)
+            return
+
+        if amount > comp["stock"]:
+            await interaction.response.send_message(f"❌ 在庫が足りません（残り: {comp['stock']:,} 株）", ephemeral=True)
+            return
+
+        total_cost = amount * comp["buy_price"]
+        user_id_str = str(interaction.user.id)
+        user_data = get_user_data(user_id_str)
+
+        if user_data["points"] < total_cost:
+            await interaction.response.send_message(f"❌ ポイントが足りません（必要: {total_cost:,} pt / 所持: {user_data['points']:,} pt）", ephemeral=True)
+            return
+
+        new_points = user_data["points"] - total_cost
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        update_user_data(user_id_str, new_points, f"[{now_str}] 💸 -{total_cost} pt ({comp['name']}株 {amount}株購入)")
+
+        comp["stock"] -= amount
+        if user_id_str not in user_stocks: user_stocks[user_id_str] = {}
+        user_stocks[user_id_str][self.company_id] = user_stocks[user_id_str].get(self.company_id, 0) + amount
+
+        embed = discord.Embed(
+            title="🎉 株の購入完了！",
+            description=f"**{comp['name']}** の株を **{amount:,} 株** 購入しました！\n支払額: **{total_cost:,} pt** (単価: {comp['buy_price']:,} pt)",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="残高ポイント", value=f"`{new_points:,} pt`")
+        embed.add_field(name="現在の保有株数", value=f"`{user_stocks[user_id_str][self.company_id]:,} 株`")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
+        if log_channel:
+            noti_embed = discord.Embed(title="📥 ポイント変動通知 (株購入)", color=discord.Color.red(), timestamp=datetime.now())
+            noti_embed.add_field(name="対象者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="対象者ID", value=f"`{interaction.user.id}`", inline=True)
+            noti_embed.add_field(name="変動値", value=f"-{total_cost} pt", inline=True)
+            noti_embed.add_field(name="理由", value=f"{comp['name']}株購入 ({amount}株)", inline=False)
+            await log_channel.send(embed=noti_embed)
+
+class UserBuySelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        options = [
+            discord.SelectOption(
+                label=data["name"],
+                value=cid,
+                description=f"購入価格: {data['buy_price']:,}pt | 在庫: {data['stock']:,}株"
+            ) for cid, data in stocks_db.items() if data["is_active"]
+        ]
+        if options:
+            select = discord.ui.Select(placeholder="購入する会社を選択してください...", options=options)
+            select.callback = self.callback
+            self.add_item(select)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(UserBuyModal(self.children[0].values[0]))
+
+class UserSellModal(discord.ui.Modal):
+    def __init__(self, company_id: str):
+        comp = stocks_db[company_id]
+        super().__init__(title=f"💸 {comp['name']} の株を売却")
+        self.company_id = company_id
+
+    amount_input = discord.ui.TextInput(label="売却株数", placeholder="例: 5", required=True, max_length=6)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        comp = stocks_db.get(self.company_id)
+        user_id_str = str(interaction.user.id)
+        owned = user_stocks.get(user_id_str, {}).get(self.company_id, 0)
+
+        try:
+            amount = int(self.amount_input.value)
+            if amount <= 0: raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ 正の整数を入力してください。", ephemeral=True)
+            return
+
+        if amount > owned:
+            await interaction.response.send_message(f"❌ 保有株数が不足しています（所持: {owned:,} 株）", ephemeral=True)
+            return
+
+        total_return = amount * comp["sell_price"]
+        user_data = get_user_data(user_id_str)
+
+        user_stocks[user_id_str][self.company_id] -= amount
+        comp["stock"] += amount
+
+        new_points = user_data["points"] + total_return
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        update_user_data(user_id_str, new_points, f"[{now_str}] 🪙 +{total_return} pt ({comp['name']}株 {amount}株売却)")
+
+        embed = discord.Embed(
+            title="💰 株の売却完了！",
+            description=f"**{comp['name']}** の株を **{amount:,} 株** 売却しました！\n受領額: **+{total_return:,} pt** (買取単価: {comp['sell_price']:,} pt)",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="残高ポイント", value=f"`{new_points:,} pt`")
+        embed.add_field(name="残りの保有株数", value=f"`{user_stocks[user_id_str][self.company_id]:,} 株`")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
+        if log_channel:
+            noti_embed = discord.Embed(title="📥 ポイント変動通知 (株売却)", color=discord.Color.green(), timestamp=datetime.now())
+            noti_embed.add_field(name="対象者", value=interaction.user.mention, inline=True)
+            noti_embed.add_field(name="対象者ID", value=f"`{interaction.user.id}`", inline=True)
+            noti_embed.add_field(name="変動値", value=f"+{total_return} pt", inline=True)
+            noti_embed.add_field(name="理由", value=f"{comp['name']}株売却 ({amount}株)", inline=False)
+            await log_channel.send(embed=noti_embed)
+
+class UserSellSelectView(discord.ui.View):
+    def __init__(self, user_id_str: str):
+        super().__init__(timeout=60)
+        owned_dict = user_stocks.get(user_id_str, {})
+        options = [
+            discord.SelectOption(
+                label=stocks_db[cid]["name"],
+                value=cid,
+                description=f"所持: {amount:,}株 | 買取価格: {stocks_db[cid]['sell_price']:,}pt"
+            ) for cid, amount in owned_dict.items() if amount > 0 and cid in stocks_db
+        ]
+        if options:
+            select = discord.ui.Select(placeholder="売却する株を選択してください...", options=options)
+            select.callback = self.callback
+            self.add_item(select)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(UserSellModal(self.children[0].values[0]))
 
 
 # ==========================================
@@ -384,22 +664,68 @@ def setup_modmail_events(bot: commands.Bot):
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
-        # 他のコグや標準コマンドが動くようにイベントをパスする
+        # 他のプレフィックスコマンド（!kabu や !sendmessage など）を正しく実行させる処理
         await bot.process_commands(message)
 
 
 # ==========================================
-# 管理・一般コマンド (各種スラッシュコマンド)
+# 管理・一般コマンド & 設定構築関数
 # ==========================================
 def setup_slash_commands(bot: commands.Bot):
-    # 最初はローカルを読み込む
     load_points()
-    
-    # 💡 非同期でDiscordチャンネルからデータを完全に同期（再起動対策）
     asyncio.create_task(sync_points_from_discord(bot))
-    
-    # メッセージイベントを設定
     setup_modmail_events(bot)
+
+    # ------------------------------------------
+    # 👑 1. 管理者専用 プレフィックスコマンド (!)
+    # ------------------------------------------
+
+    # --- !kabu コマンド (管理者専用 パネル) ---
+    @bot.command(name="kabu")
+    async def admin_kabu(ctx: commands.Context):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in ctx.author.roles):
+            await ctx.send("❌ このコマンドを実行する権限（管理者ロール）がありません。")
+            return
+
+        embed = discord.Embed(
+            title="⚙️ 株式市場 管理専用パネル",
+            description="会社の新規作成、株価の手動変更、販売の開始/停止、削除ができます。",
+            color=discord.Color.dark_theme()
+        )
+
+        lines = []
+        for cid, data in stocks_db.items():
+            status = "🟢 販売中" if data["is_active"] else "🔴 販売停止"
+            lines.append(f"• **{data['name']}** (ID: `{cid}`): 購入 `{data['buy_price']:,}pt` / 売却 `{data['sell_price']:,}pt` [{status}]")
+        
+        embed.add_field(name="📋 登録中の会社一覧", value="\n".join(lines) or "登録された会社はありません", inline=False)
+        await ctx.send(embed=embed, view=AdminKabuPanelView())
+
+    # --- !sendmessage (チャンネルID) (内容) コマンド (管理者専用) ---
+    @bot.command(name="sendmessage")
+    async def send_message_cmd(ctx: commands.Context, channel_id: int, *, content: str):
+        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in ctx.author.roles):
+            await ctx.send("❌ このコマンドを実行する権限（管理者ロール）がありません。")
+            return
+
+        target_channel = bot.get_channel(channel_id)
+        if not target_channel:
+            try:
+                target_channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                await ctx.send("❌ 指定されたチャンネルが見つからないか、Botにアクセス権限がありません。")
+                return
+
+        try:
+            await target_channel.send(content)
+            await ctx.send(f"✅ <#{channel_id}> にメッセージを送信しました。")
+        except Exception as e:
+            await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
+
+
+    # ------------------------------------------
+    # 📨 2. Modmail系 スラッシュコマンド
+    # ------------------------------------------
 
     # --- /closereq コマンド ---
     @bot.tree.command(name="closereq", description="ユーザーにクローズ確認リクエストを送信します")
@@ -523,9 +849,9 @@ def setup_slash_commands(bot: commands.Bot):
         await interaction.response.send_message(embed=reset_embed, view=new_view)
 
 
-    # ==========================================
-    # ポイントシステム スラッシュコマンド
-    # ==========================================
+    # ------------------------------------------
+    # 🪙 3. ポイントシステム スラッシュコマンド
+    # ------------------------------------------
 
     # --- /work コマンド ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
@@ -559,7 +885,6 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-        # 💡 同期用のポイントデータベースチャンネルに必ず解析可能なログを送る
         log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
         if log_channel:
             noti_embed = discord.Embed(title="📥 ポイント変動通知 (お仕事)", color=discord.Color.green(), timestamp=datetime.now())
@@ -636,10 +961,8 @@ def setup_slash_commands(bot: commands.Bot):
     # --- /rankings コマンド ---
     @bot.tree.command(name="rankings", description="ポイントの所持数ランキング上位10名を表示します")
     async def rankings_command(interaction: discord.Interaction):
-        # 全員に見える公開メッセージとして送信（ephemeral=False）
         await interaction.response.defer(ephemeral=False)
 
-        # 1ポイント以上のユーザーのみ抽出
         filtered_users = [
             (user_id, data) for user_id, data in points_data.items()
             if data.get("points", 0) >= 1
@@ -654,7 +977,6 @@ def setup_slash_commands(bot: commands.Bot):
             await interaction.followup.send(embed=embed)
             return
 
-        # ポイントが多い順にソート
         sorted_users = sorted(filtered_users, key=lambda item: item[1].get("points", 0), reverse=True)
         top_10 = sorted_users[:10]
 
@@ -755,3 +1077,96 @@ def setup_slash_commands(bot: commands.Bot):
             noti_embed.add_field(name="変動値", value=f"-{amount} pt", inline=True)
             noti_embed.add_field(name="使用用途（理由）", value=reason, inline=False)
             await log_channel.send(embed=noti_embed)
+
+
+    # ------------------------------------------
+    # 📈 4. 株式システム スラッシュコマンド (/kabu)
+    # ------------------------------------------
+    kabu_group = app_commands.Group(name="kabu", description="株式取引・情報コマンド")
+
+    # --- /kabu buy ---
+    @kabu_group.command(name="buy", description="販売中の株式を購入します")
+    async def kabu_buy(interaction: discord.Interaction):
+        view = UserBuySelectView()
+        if not view.children:
+            await interaction.response.send_message("❌ 現在購入できる会社はありません。", ephemeral=True)
+            return
+        await interaction.response.send_message("🏢 購入したい会社を選択してください:", view=view, ephemeral=True)
+
+    # --- /kabu sell ---
+    @kabu_group.command(name="sell", description="保有している株式を売却します")
+    async def kabu_sell(interaction: discord.Interaction):
+        user_id_str = str(interaction.user.id)
+        view = UserSellSelectView(user_id_str)
+        if not view.children:
+            await interaction.response.send_message("❌ 売却できる保有株がありません。", ephemeral=True)
+            return
+        await interaction.response.send_message("💸 売却したい会社を選択してください:", view=view, ephemeral=True)
+
+    # --- /kabu company ---
+    @kabu_group.command(name="company", description="現在株を販売・売り出し中の会社一覧を表示します")
+    async def kabu_company(interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🏢 現在株を販売中の会社一覧",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+
+        active_lines = []
+        for cid, data in stocks_db.items():
+            if data["is_active"]:
+                active_lines.append(
+                    f"🟢 **{data['name']}** (ID: `{cid}`)\n"
+                    f"├ 購入価格: **{data['buy_price']:,} pt** | 買取価格: **{data['sell_price']:,} pt**\n"
+                    f"└ 残り在庫: **{data['stock']:,} 株**\n"
+                )
+
+        if active_lines:
+            embed.description = "以下の会社で現在株の購入が可能です。\n`/kabu buy` で購入できます。\n\n" + "\n".join(active_lines)
+        else:
+            embed.description = "❌ 現在、株を販売している会社はありません。"
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # --- /kabu info ---
+    @kabu_group.command(name="info", description="登録されている全会社の状況と自分の保有株を表示します")
+    async def kabu_info(interaction: discord.Interaction):
+        embed = discord.Embed(title="📊 株式市場 & ポートフォリオ情報", color=discord.Color.blue(), timestamp=datetime.now())
+
+        market_lines = []
+        for cid, data in stocks_db.items():
+            yesterday_p = data["history"][-1]
+            diff = data["buy_price"] - yesterday_p
+            pct = (diff / yesterday_p) * 100 if yesterday_p > 0 else 0
+            diff_str = f"🔺+{diff:,}pt (+{pct:.1f}%)" if diff > 0 else (f"🔻{diff:,}pt ({pct:.1f}%)" if diff < 0 else "➖ 変化なし")
+            history_str = " ➔ ".join([f"{p:,}pt" for p in data["history"]]) + f" ➔ **{data['buy_price']:,}pt**"
+            status_str = "🟢 販売中" if data["is_active"] else "🔴 販売停止中"
+
+            market_lines.append(
+                f"🏢 **{data['name']}** [{status_str}]\n"
+                f"├ 購入価格: **{data['buy_price']:,} pt** | 買取価格: **{data['sell_price']:,} pt** ({diff_str})\n"
+                f"├ 残り在庫: {data['stock']:,} 株\n"
+                f"└ 過去3日推移: `{history_str}`\n"
+            )
+
+        embed.add_field(name="🌐 登録全会社・市場状況", value="\n".join(market_lines) or "登録銘柄なし", inline=False)
+
+        user_id_str = str(interaction.user.id)
+        owned_dict = user_stocks.get(user_id_str, {})
+        portfolio_lines = []
+        total_eval = 0
+
+        for cid, amount in owned_dict.items():
+            if amount > 0 and cid in stocks_db:
+                comp = stocks_db[cid]
+                eval_val = amount * comp["sell_price"]
+                total_eval += eval_val
+                portfolio_lines.append(f"• **{comp['name']}**: {amount:,} 株 (売却想定額: `{eval_val:,} pt`)")
+
+        portfolio_text = "\n".join(portfolio_lines) if portfolio_lines else "*保有している株はありません*"
+        embed.add_field(name=f"💼 {interaction.user.display_name} さんの保有株式", value=f"{portfolio_text}\n\n**総売却可能評価額: `{total_eval:,} pt`**", inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Botツリーに `/kabu` グループを追加
+    bot.tree.add_command(kabu_group)
