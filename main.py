@@ -9,6 +9,9 @@ import asyncio
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
 
+# 🛠️ 自己推薦システム（Quiz.py）をインポート【追加】
+from Quiz import load_config_from_discord, setup_quiz_commands
+
 # ==========================================
 # Flask (RenderやUptimeRobot等の死活監視用)
 # ==========================================
@@ -57,6 +60,9 @@ from discord import app_commands
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録【追加】
+setup_quiz_commands(bot)
 
 # ==========================================
 # JSON 永続化データ管理
@@ -529,6 +535,19 @@ async def on_ready():
     sub.setup_slash_commands(bot)
     # ------------------------------------------
     # 🛠️ ここまで
+    # ------------------------------------------
+
+    # ------------------------------------------
+    # 🛠️ ここから Quiz.py (自己推薦設定データ) の復旧処理【追加】
+    # ------------------------------------------
+    print("🔄 [起動処理] Quiz.py の設定データをDiscordから復旧中...")
+    try:
+        await load_config_from_discord(bot)
+        print("✅ [起動処理] Quiz.py のデータ復旧が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] Quiz.py データ復旧中にエラーが発生しました: {e}")
+    # ------------------------------------------
+    # 🛠️ ここまで【追加】
     # ------------------------------------------
 
     # 🧹 重複防止：一旦古いコマンド設定をクリアしてから全体同期
