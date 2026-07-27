@@ -17,7 +17,7 @@ quiz_config = {
     "panel_message_id": None,
     "admin_channel_id": None,
     "admin_message_id": None,
-    "role_name": "自己推薦",
+    "role_name": "自己推薦",  # チャンネル名に使用する役職名・種別名
     "questions": [
         {
             "id": 1,
@@ -75,29 +75,7 @@ async def load_config_from_discord(bot: commands.Bot):
         print(f"❌ quiz.py 設定復旧エラー: {e}")
 
 # ==========================================
-# 準備確認ボタン View (チケット作成後に送信)
-# ==========================================
-class ReadyCheckView(discord.ui.View):
-    def __init__(self, applicant: discord.Member):
-        super().__init__(timeout=None)
-        self.applicant = applicant
-
-    @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes")
-    async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 応募者本人以外が押した場合は弾く
-        if interaction.user.id != self.applicant.id:
-            await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
-            return
-
-        # ボタンを無効化してメッセージを更新
-        button.disabled = True
-        await interaction.response.edit_message(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
-
-        # 対話型回答セッションの開始
-        await start_quiz_session(interaction.channel, self.applicant, interaction.client)
-
-# ==========================================
-# 1問ずつメッセージで出題する処理
+# 1問ずつメッセージで出題・回答を受付する処理
 # ==========================================
 async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Member, bot: commands.Bot):
     questions = quiz_config.get("questions", [])
@@ -108,13 +86,12 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
         return m.author.id == applicant.id and m.channel.id == channel.id
 
     for q in questions:
-        # 問題の送信
         embed = discord.Embed(
             title=f"❓ 質問 {q['id']} / {len(questions)}",
             description=q["question"],
             color=discord.Color.blue()
         )
-        embed.set_footer(text="メッセージを送信して回答してください。")
+        embed.set_footer(text="このチャンネルにメッセージを送信して回答してください。")
         await channel.send(embed=embed)
 
         try:
@@ -127,14 +104,14 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
             await channel.send("✅ 回答を受け付けました。")
             await asyncio.sleep(1)
         except asyncio.TimeoutError:
-            await channel.send("⏰ 応答が一定時間なかったため、受け付けを一時中断しました。")
+            await channel.send("⏰ 応答が一定時間なかったため、受付を一時中断しました。")
             return
 
-    # 全問回答完了時のサマリー表示
+    # 全問回答完了時の結果出力
     result_embed = discord.Embed(
-        title="🎉 応募の回答が完了しました！",
-        description="ご回答ありがとうございました。提出内容は以下の通りです。",
-        color=discord.Color.gold()
+        title="📄 応募回答が提出されました",
+        description="ご回答ありがとうございました！審査完了までお待ちください。",
+        color=discord.Color.green()
     )
     result_embed.set_author(name=f"{applicant.display_name} ({applicant.name})", icon_url=applicant.display_avatar.url)
 
@@ -144,8 +121,29 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
             value=item["answer"],
             inline=False
         )
+    result_embed.set_footer(text=f"User ID: {applicant.id}")
 
     await channel.send(embed=result_embed)
+
+# ==========================================
+# 準備確認ボタン View (チケット作成後に送信)
+# ==========================================
+class ReadyCheckView(discord.ui.View):
+    def __init__(self, applicant: discord.Member):
+        super().__init__(timeout=None)
+        self.applicant = applicant
+
+    @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes")
+    async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.applicant.id:
+            await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
+            return
+
+        button.disabled = True
+        await interaction.response.edit_message(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
+
+        # 質疑応答セッション開始
+        await start_quiz_session(interaction.channel, self.applicant, interaction.client)
 
 # ==========================================
 # 応募ボタン View (一般ユーザー用パネル)
@@ -164,36 +162,35 @@ class QuizUserPanelView(discord.ui.View):
         user = interaction.user
         role_name = quiz_config.get("role_name", "自己推薦")
 
-        # チャンネル名: (応募役職)-(ユーザー名)
+        # チャンネル名: 「(応募役職)-(ユーザー名)」
         channel_name = f"{role_name}-{user.name}".lower()
 
-        # チケットチャンネルの権限
+        # 権限設定（非公開チャンネル）
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
 
-        # 非公開チャンネルを作成
+        # チャンネル作成
         category = interaction.channel.category
         ticket_channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
             overwrites=overwrites,
-            topic=f"{user.display_name} さんの応募用チャンネルです。"
+            topic=f"{user.display_name} さんの応募用チケットチャンネルです。"
         )
 
-        # 作成されたチャンネルに「準備はできましたか？」メッセージを送信
+        # チケットチャンネル内で「準備はできましたか？」と確認
         ready_embed = discord.Embed(
-            title=f"📋 {role_name} 応募確認",
-            description=f"{user.mention} さん、専用チャンネルを作成しました。\n**準備はできましたか？**\n「はい」のボタンを押すと質疑応答を開始します。",
+            title=f"📋 {role_name} 応募手続き",
+            description=f"{user.mention} さん、専用チャンネルを作成しました。\n\n**準備はできましたか？**\n以下の「はい (開始する)」ボタンを押すと質問を開始します。",
             color=discord.Color.green()
         )
-        
         view = ReadyCheckView(applicant=user)
         await ticket_channel.send(content=user.mention, embed=ready_embed, view=view)
 
-        # 案内メッセージ
+        # 本人への案内メッセージ
         await interaction.response.send_message(f"✅ 専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
 
 # ==========================================
