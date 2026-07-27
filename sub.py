@@ -1051,17 +1051,31 @@ async def on_ready():
     await sync_points_from_discord(bot)
     await sync_stocks_from_discord(bot)
     
-    # 2. 定期タスクを安全に起動（★ここに追加★）
+    # 2. 定期タスクを安全に起動
     if not stock_price_update_task.is_running():
         stock_price_update_task.start(bot)
         print("⏰ 株価自動更新タスクを起動しました。")
+        
+    # 3. 起動時のデータをログへ安全保存
+    await save_stocks_to_discord(bot)
     
-    # 3. スラッシュコマンドをDiscordへ同期
+    # 4. スラッシュコマンドをDiscordへ同期
     try:
         synced = await bot.tree.sync()
         print(f"✅ スラッシュコマンドを {len(synced)} 件同期しました。")
     except Exception as e:
         print(f"❌ スラッシュコマンドの同期に失敗しました: {e}")
+
+# ==========================================
+# 💾 株式データの即時保存用ヘルパー関数
+# ==========================================
+async def auto_save_stocks(bot: commands.Bot):
+    """データ変更時にDiscordログチャンネルへ即時バックアップを実行"""
+    try:
+        await save_stocks_to_discord(bot)
+        print("✅ 株式データを即時バックアップしました。")
+    except Exception as e:
+        print(f"❌ 株式データの即時バックアップに失敗しました: {e}")
 
 # TOKENをセットして実行（★一番最後に置く★）
 # bot.run("YOUR_BOT_TOKEN")
