@@ -59,7 +59,7 @@ def setup_modmail_events(bot: commands.Bot):
 
 # --- 株式ログ同期・バックアップ関数 ---
 async def save_stocks_to_discord(bot: commands.Bot):
-    """現在の stocks_db と user_stocks を Discord ログチャンネル(1527164312634920980)に JSON形式でバックアップ保存"""
+    """現在の stocks_db と user_stocks を Discord ログチャンネルに JSON形式でバックアップ保存"""
     channel = bot.get_channel(STOCK_DATABASE_CHANNEL_ID)
     if not channel:
         try:
@@ -110,24 +110,30 @@ async def sync_stocks_from_discord(bot: commands.Bot):
                             stocks_db = data.get("stocks_db", {})
                             user_stocks = data.get("user_stocks", {})
                             found_backup = True
-                            print("✅ ファイルバックアップから株式データを完全復元しました。")
+                            print(f"✅ ファイルバックアップから株式データを完全復元しました。（銘柄数: {len(stocks_db)}）")
                             break
                     except Exception as e:
                         print(f"❌ ファイルバックアップ解析エラー: {e}")
             if found_backup:
                 break
 
-        # 2. テキスト形式コードブロックバックアップの読み込み
+        # 2. テキスト形式バックアップの読み込み（見出しやコード枠を柔軟に判定）
         if msg.content and "STOCK_DB_BACKUP" in msg.content:
             try:
-                match = re.search(r"```json\s*(\{.*?\})\s*```", msg.content, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(1))
-                    stocks_db = data.get("stocks_db", {})
-                    user_stocks = data.get("user_stocks", {})
-                    found_backup = True
-                    print("✅ テキストバックアップから株式データを完全復元しました。")
-                    break
+                content = msg.content
+                start_idx = content.find('{')
+                end_idx = content.rfind('}')
+                
+                if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                    json_str = content[start_idx:end_idx + 1]
+                    data = json.loads(json_str)
+                    
+                    if isinstance(data, dict) and data.get("type") == "STOCK_DB_BACKUP":
+                        stocks_db = data.get("stocks_db", {})
+                        user_stocks = data.get("user_stocks", {})
+                        found_backup = True
+                        print(f"✅ テキストバックアップから株式データを完全復元しました。（銘柄数: {len(stocks_db)}）")
+                        break
             except Exception as e:
                 print(f"❌ テキストバックアップ解析エラー: {e}")
 
