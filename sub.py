@@ -535,7 +535,6 @@ def setup_slash_commands(bot: commands.Bot):
 
     # 📈 株価自動更新タスクの開始
     if not stock_price_update_task.is_running():
-        stock_price_update_task.start(bot)
 
     # ------------------------------------------
     # 👑 1. 管理者専用 プレフィックスコマンド (!)
@@ -1032,6 +1031,9 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 設定のセットアップ実行
+setup_slash_commands(bot)
+
 @bot.event
 async def on_ready():
     print(f"🤖 Botがログインしました: {bot.user} (ID: {bot.user.id})")
@@ -1040,15 +1042,17 @@ async def on_ready():
     await sync_points_from_discord(bot)
     await sync_stocks_from_discord(bot)
     
-    # 2. スラッシュコマンドをDiscordへ同期
+    # 2. 定期タスクを安全に起動（★ここに追加★）
+    if not stock_price_update_task.is_running():
+        stock_price_update_task.start(bot)
+        print("⏰ 株価自動更新タスクを起動しました。")
+    
+    # 3. スラッシュコマンドをDiscordへ同期
     try:
         synced = await bot.tree.sync()
         print(f"✅ スラッシュコマンドを {len(synced)} 件同期しました。")
     except Exception as e:
         print(f"❌ スラッシュコマンドの同期に失敗しました: {e}")
 
-# 設定のセットアップ実行
-setup_slash_commands(bot)
-
-# TOKENをセットして実行してください
+# TOKENをセットして実行（★一番最後に置く★）
 # bot.run("YOUR_BOT_TOKEN")
