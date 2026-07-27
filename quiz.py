@@ -10,7 +10,7 @@ import asyncio
 CONFIG_CHANNEL_ID = 1344265089330860124  # 設定保存用チャンネルID
 config_message_id = None
 
-# 初期設定データ構造（複数部署対応版にアップデート）
+# 初期設定データ構造
 quiz_config = {
     "admin_channel_id": None,
     "admin_message_id": None,
@@ -63,7 +63,6 @@ async def load_config_from_discord(bot: commands.Bot):
             if msg.author.id == bot.user.id and msg.content.startswith("```json"):
                 json_str = msg.content.strip("`").replace("json\n", "").strip()
                 loaded_data = json.loads(json_str)
-                # 旧バージョンからの移行対応
                 if "departments" not in loaded_data:
                     loaded_data["departments"] = quiz_config["departments"]
                 quiz_config.update(loaded_data)
@@ -154,7 +153,7 @@ class ReadyCheckView(discord.ui.View):
         self.dept_name = dept_name
         self.questions = questions
 
-    @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes")
+    @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes_dynamic")
     async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.applicant.id:
             await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
@@ -177,7 +176,7 @@ class QuizUserPanelSelect(discord.ui.Select):
         if not options:
             options.append(discord.SelectOption(label="現在募集中の部署はありません", value="none"))
             
-        super().__init__(placeholder="応募する部署を選択してください...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="応募する部署を選択してください...", min_values=1, max_values=1, options=options, custom_id="quiz_user_select_persistent")
 
     async def callback(self, interaction: discord.Interaction):
         dept_name = self.values[0]
@@ -185,9 +184,9 @@ class QuizUserPanelSelect(discord.ui.Select):
             await interaction.response.send_message("現在応募できる部署がありません。", ephemeral=True)
             return
 
-        dept_data = quiz_config["departments"][dept_name]
-        if not dept_data["is_open"]:
-            await interaction.response.send_message(f"🚫 「{dept_name}」は現在募集を締め切っています。", ephemeral=True)
+        dept_data = quiz_config["departments"].get(dept_name)
+        if not dept_data or not dept_data["is_open"]:
+            await interaction.response.send_message(f"🚫 「{dept_name}」は存在しないか、現在募集を締め切っています。", ephemeral=True)
             return
 
         guild = interaction.guild
@@ -224,7 +223,7 @@ class QuizUserPanelView(discord.ui.View):
         self.add_item(QuizUserPanelSelect())
 
 # ==========================================
-# 管理者用 アクションモーダル＆セレクト
+# 管理者用 モーダル＆セレクト
 # ==========================================
 class AddDeptModal(discord.ui.Modal, title="新しい部署の追加"):
     dept_name = discord.ui.TextInput(label="部署名を入力", placeholder="例: 広報部", required=True, max_length=20)
@@ -241,26 +240,51 @@ class AddDeptModal(discord.ui.Modal, title="新しい部署の追加"):
             
         quiz_config["departments"][name] = {"is_open": True, "questions": []}
         await save_config_to_discord(interaction.client)
-        await self.admin_msg.edit(embed=generate_admin_embed())
+        try:
+            await self.admin_msg.edit(embed=generate_admin_embed())
+        except discord.NotFound:
+            pass
         await interaction.response.send_message(f"✅ 部署「{name}」を追加しました。", ephemeral=True)
 
 
-class AddQuestionModal(discord.ui.Modal):
-    question_text = discord.ui.TextInput(label="質問内容", style=discord.TextStyle.paragraph, required=True, max_length=1000)
+class AddQuestionsModal(discord.ui.Modal):
+    questions_text = discord.ui.TextInput(
+        label="質問内容（1行につき1問）",
+        style=discord.TextStyle.paragraph,
+        placeholder="例:\n志望動機を教えてください\n得意な言語は何ですか\n過去の制作実績はありますか",
+        required=True,
+        max_length=2000
+    )
 
     def __init__(self, dept_name: str, admin_msg: discord.Message):
-        super().__init__(title=f"{dept_name}に質問追加")
+        super().__init__(title=f"{dept_name}に質問を一括追加")
         self.dept_name = dept_name
         self.admin_msg = admin_msg
 
     async def on_submit(self, interaction: discord.Interaction):
-        q_list = quiz_config["departments"][self.dept_name]["questions"]
-        new_id = len(q_list) + 1
-        q_list.append({"id": new_id, "question": self.question_text.value})
+        dept_data = quiz_config["departments"].get(self.dept_name)
+        if not dept_data:
+            await interaction.response.send_message("⚠️ 指定された部署が見つかりませんでした。", ephemeral=True)
+            return
+
+        # 改行区切りで問題文を分割し、空行を省く
+        lines = [line.strip() for line in self.questions_text.value.split("\n") if line.strip()]
         
+        # 既存の質問の後ろに連番で追加していく
+        current_len = len(dept_data["questions"])
+        added_count = 0
+        for i, line in enumerate(lines):
+            new_id = current_len + i + 1
+            dept_data["questions"].append({"id": new_id, "question": line})
+            added_count += 1
+
         await save_config_to_discord(interaction.client)
-        await self.admin_msg.edit(embed=generate_admin_embed())
-        await interaction.response.send_message(f"✅ {self.dept_name}に新しい質問（問{new_id}）を追加しました。", ephemeral=True)
+        try:
+            await self.admin_msg.edit(embed=generate_admin_embed())
+        except discord.NotFound:
+            pass
+            
+        await interaction.response.send_message(f"✅ 「{self.dept_name}」に **{added_count}問** の質問を追加しました！", ephemeral=True)
 
 
 class SelectDeptView(discord.ui.View):
@@ -270,30 +294,44 @@ class SelectDeptView(discord.ui.View):
         self.admin_msg = admin_msg
         
         options = [discord.SelectOption(label=d, value=d) for d in quiz_config["departments"].keys()]
+        if not options:
+            options.append(discord.SelectOption(label="部署がありません", value="none"))
+            
         select = discord.ui.Select(placeholder="対象の部署を選択してください...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
 
     async def select_callback(self, interaction: discord.Interaction):
         dept = self.children[0].values[0]
+        if dept == "none":
+            await interaction.response.edit_message(content="部署が存在しません。", view=None)
+            return
         
         if self.action == "delete":
             del quiz_config["departments"][dept]
             await save_config_to_discord(interaction.client)
-            await self.admin_msg.edit(embed=generate_admin_embed())
+            try:
+                await self.admin_msg.edit(embed=generate_admin_embed())
+            except discord.NotFound:
+                pass
             await interaction.response.edit_message(content=f"🗑️ 部署「{dept}」を削除しました。", view=None)
             
         elif self.action == "toggle":
             quiz_config["departments"][dept]["is_open"] = not quiz_config["departments"][dept]["is_open"]
             await save_config_to_discord(interaction.client)
-            await self.admin_msg.edit(embed=generate_admin_embed())
-            state = "🟢募集開始" if quiz_config["departments"][dept]["is_open"] else "🔴募集停止"
+            try:
+                await self.admin_msg.edit(embed=generate_admin_embed())
+            except discord.NotFound:
+                pass
+            state = "🟢 募集開始" if quiz_config["departments"][dept]["is_open"] else "🔴 募集停止"
             await interaction.response.edit_message(content=f"🔄 「{dept}」を **{state}** に変更しました。", view=None)
             
         elif self.action == "add_question":
-            # モーダルを開き、このセレクトメニュー自体は消す
-            await interaction.response.send_modal(AddQuestionModal(dept, self.admin_msg))
-            await interaction.message.delete()
+            await interaction.response.send_modal(AddQuestionsModal(dept, self.admin_msg))
+            try:
+                await interaction.message.delete()
+            except discord.NotFound:
+                pass
 
 # ==========================================
 # 管理パネル View (管理者用)
@@ -302,32 +340,32 @@ class AdminPanelEditView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="➕ 部署追加", style=discord.ButtonStyle.primary, custom_id="admin_add_dept")
+    @discord.ui.button(label="➕ 部署追加", style=discord.ButtonStyle.primary, custom_id="admin_add_dept_btn")
     async def add_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AddDeptModal(interaction.message))
 
-    @discord.ui.button(label="🗑️ 部署削除", style=discord.ButtonStyle.danger, custom_id="admin_del_dept")
+    @discord.ui.button(label="🗑️ 部署削除", style=discord.ButtonStyle.danger, custom_id="admin_del_dept_btn")
     async def del_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 削除できる部署がありません。", ephemeral=True)
             return
         await interaction.response.send_message("削除する部署を選んでください:", view=SelectDeptView("delete", interaction.message), ephemeral=True)
 
-    @discord.ui.button(label="❓ 質問追加", style=discord.ButtonStyle.secondary, custom_id="admin_add_question")
+    @discord.ui.button(label="❓ 質問追加", style=discord.ButtonStyle.secondary, custom_id="admin_add_question_btn")
     async def add_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 先に「部署追加」を行ってください。", ephemeral=True)
             return
         await interaction.response.send_message("質問を追加する部署を選んでください:", view=SelectDeptView("add_question", interaction.message), ephemeral=True)
 
-    @discord.ui.button(label="🔄 募集ON/OFF機能", style=discord.ButtonStyle.secondary, custom_id="admin_toggle_status")
+    @discord.ui.button(label="🔄 募集ON/OFF機能", style=discord.ButtonStyle.secondary, custom_id="admin_toggle_status_btn")
     async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 設定する部署がありません。", ephemeral=True)
             return
-        await interaction.response.send_message("ON/OFFを切り替える部署を選んでください:", view=SelectDeptView("toggle", interaction.message), ephemeral=True)
+        await interaction.response.send_message("ON/OFFを切り替える部署を選んでください:", view=SelectDeptView("toggle", interaction.message), ephemeral=Type)
 
-    @discord.ui.button(label="📌 パネル送信", style=discord.ButtonStyle.success, custom_id="admin_send_panel")
+    @discord.ui.button(label="📌 パネル送信", style=discord.ButtonStyle.success, custom_id="admin_send_panel_btn")
     async def send_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="✨ 自己推薦・応募受付",
@@ -341,6 +379,9 @@ class AdminPanelEditView(discord.ui.View):
 # コマンドの登録関数
 # ==========================================
 def setup_quiz_commands(bot: commands.Bot):
+    # 永続化ビューの登録（「ダイヤ作成所BOTは時間内に応答しませんでした」エラーの防止）
+    bot.add_view(AdminPanelEditView())
+    bot.add_view(QuizUserPanelView())
 
     @bot.command(name="recommendadminpanel")
     @commands.has_permissions(administrator=True)
