@@ -134,35 +134,33 @@ async def sync_stocks_from_discord(bot: commands.Bot):
     if not found_backup:
         print("ℹ️ 有効な株式バックアップが見つからなかったため、新規状態で開始します。")
 
-
 # ==========================================
-# 📈 株式価格の自動更新タスク (1時間周期)
+# 📈 株式価格の自動更新タスク (15分周期)
 # ==========================================
-@tasks.loop(hours=1)
+@tasks.loop(minutes=15)
 async def stock_price_update_task(bot: commands.Bot):
     if not stocks_db:
         return
 
     for cid, data in stocks_db.items():
         current_price = data["buy_price"]
-        
-        if "history" not in data:
-            data["history"] = [current_price, current_price, current_price]
-        
-        data["history"].append(current_price)
-        if len(data["history"]) > 3:
-            data["history"].pop(0)
 
+        # 1. 指定の確率・変動率で計算
         rand_val = random.random()
         if rand_val < 0.01:
+            # 1%: 大暴騰 (+200%)
             rate = 2.00
-        elif rand_val < 0.11:
-            rate = random.uniform(0.30, 0.60)
+        elif rand_val < 0.21:
+            # 20%: 高騰 (+30% 〜 +50%)
+            rate = random.uniform(0.30, 0.50)
         elif rand_val < 0.50:
-            rate = random.uniform(0.01, 0.30)
+            # 29%: 上昇 (+10% 〜 +30%)
+            rate = random.uniform(0.10, 0.30)
         else:
-            rate = random.uniform(-0.15, -0.01)
+            # 50%: 下落 (-1% 〜 -50%)
+            rate = random.uniform(-0.50, -0.01)
 
+        # 2. 新しい価格の計算
         new_buy_price = round(current_price * (1 + rate))
         if new_buy_price < 1:
             new_buy_price = 1
@@ -171,12 +169,20 @@ async def stock_price_update_task(bot: commands.Bot):
         if new_sell_price < 1:
             new_sell_price = 1
 
+        # 3. データの更新
         data["buy_price"] = new_buy_price
         data["sell_price"] = new_sell_price
 
-    # 自動保存
-    await save_stocks_to_discord(bot)
+        # 4. 履歴の更新 (最新価格を保持)
+        if "history" not in data:
+            data["history"] = [new_buy_price, new_buy_price, new_buy_price]
 
+        data["history"].append(new_buy_price)
+        if len(data["history"]) > 3:
+            data["history"].pop(0)
+
+    # 5. Discordへ自動保存
+    await save_stocks_to_discord(bot)
 
 # ==========================================
 # 🔘 UIコンポーネント (Modal & View)
