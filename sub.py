@@ -1,606 +1,407 @@
+# ==========================================
+# sub.py (Modmailシステム + ポイントシステム)
+# ==========================================
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 import asyncio
-import random
-import io
-import json
-import re
 from datetime import datetime
+import io
+import os
+import random
+import json
 
-# ==========================================
-# ⚙️ 定数・設定値
-# ==========================================
-ADMIN_ROLE_ID_POINTS = 1510405214811852900  # 管理者ロールIDに置き換えてください
-WORK_ROLE_ID = 1510021467155202057          # お仕事コマンド実行可能ロールID
-INBOX_CATEGORY_ID = 1513901626610553043     # Modmail受信カテゴリーID
-LOG_CHANNEL_ID = 1513901627415855256        # チケットログ出力用チャンネルID
-POINT_DATABASE_CHANNEL_ID = 1527164312634920980 # ポイントデータベースログチャンネルID
+# --- 固定設定 ---
+INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
+LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
+RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
+ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-# 📈 株式データベースログ用チャンネルID（保存・復元の参照先）
-STOCK_DATABASE_CHANNEL_ID = 1527164312634920980
+VERSION = "v7.2.1 (Point Database Sync)"
 
-# ==========================================
-# 📦 グローバルデータストア
-# ==========================================
-# points_data: { "user_id_str": {"points": int, "logs": [str]} }
+# --- ポイントシステム用設定 ---
+# 💡 指定していただいたデータベース用チャンネルIDを設定しました！
+POINT_DATABASE_CHANNEL_ID = 1527164312634920980  
+WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
+ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POINTS_FILE = os.path.join(BASE_DIR, "points.json")
+
 points_data = {}
 
-# stocks_db: { "company_id": {"name": str, "buy_price": int, "sell_price": int, "stock": int, "is_active": bool, "history": [int, int, int]} }
-stocks_db = {}
-
-# user_stocks: { "user_id_str": { "company_id": int_amount } }
-user_stocks = {}
-
-
 # ==========================================
-# 🛠️ 内部ヘルパー関数（ポイント＆株式）
+# 💎 Discordチャンネルからポイントを自動復元・同期する関数
 # ==========================================
-def get_user_data(user_id_str: str):
-    if user_id_str not in points_data:
-        points_data[user_id_str] = {"points": 0, "logs": []}
-    return points_data[user_id_str]
-
-def update_user_data(user_id_str: str, points: int, log_entry: str):
-    data = get_user_data(user_id_str)
-    data["points"] = points
-    if "logs" not in data:
-        data["logs"] = []
-    data["logs"].append(log_entry)
-
-def load_points():
-    pass
-
 async def sync_points_from_discord(bot: commands.Bot):
-    pass
-
-def setup_modmail_events(bot: commands.Bot):
-    pass
-
-# --- 株式ログ同期・バックアップ関数 ---
-async def save_stocks_to_discord(bot: commands.Bot):
-    """現在の stocks_db と user_stocks を Discord ログチャンネルに JSON形式でバックアップ保存"""
-    channel = bot.get_channel(STOCK_DATABASE_CHANNEL_ID)
-    if not channel:
-        try:
-            channel = await bot.fetch_channel(STOCK_DATABASE_CHANNEL_ID)
-        except Exception as e:
-            print(f"❌ 株式バックアップチャンネル取得失敗: {e}")
-            return
-
-    backup_payload = {
-        "type": "STOCK_DB_BACKUP",
-        "timestamp": datetime.now().isoformat(),
-        "stocks_db": stocks_db,
-        "user_stocks": user_stocks
-    }
-    json_str = json.dumps(backup_payload, ensure_ascii=False, indent=2)
+    global points_data
+    print("【データベース】Discordのチャンネルからポイントデータの同期を開始します...")
     
-    # 2000文字超え対策（ファイル添付に切り替え）
-    if len(json_str) > 1900:
-        with io.StringIO(json_str) as f:
-            file = discord.File(f, filename="stock_backup.json")
-            await channel.send("📦 **[株式データ自動バックアップ]**", file=file)
-    else:
-        await channel.send(f"📦 **[株式データ自動バックアップ]**\n```json\n{json_str}\n```")
-
-async def sync_stocks_from_discord(bot: commands.Bot):
-    """Discordチャンネルの過去メッセージログを全スキャンし、最新バックアップから株式データを完全復元"""
-    global stocks_db, user_stocks
-    channel = bot.get_channel(STOCK_DATABASE_CHANNEL_ID)
+    channel = bot.get_channel(POINT_DATABASE_CHANNEL_ID)
     if not channel:
         try:
-            channel = await bot.fetch_channel(STOCK_DATABASE_CHANNEL_ID)
-        except Exception:
-            print("⚠️ 株式データベースチャンネルにアクセスできませんでした。")
+            channel = await bot.fetch_channel(POINT_DATABASE_CHANNEL_ID)
+        except Exception as e:
+            print(f"【エラー】同期対象のチャンネルが見つかりません: {e}")
             return
 
-    print("🔄 株式データをDiscordログからスキャン・復元中...")
-    found_backup = False
+    # 一時的にデータをリセットして、古い順からログを追体験して再構築する
+    temp_data = {}
+    count = 0
 
-    async for msg in channel.history(limit=200, oldest_first=False):
-        # 1. 添付ファイル付きバックアップの読み込み
-        if msg.attachments:
-            for att in msg.attachments:
-                if att.filename.endswith(".json"):
-                    try:
-                        content = await att.read()
-                        data = json.loads(content.decode("utf-8"))
-                        if isinstance(data, dict) and data.get("type") == "STOCK_DB_BACKUP":
-                            stocks_db = data.get("stocks_db", {})
-                            user_stocks = data.get("user_stocks", {})
-                            found_backup = True
-                            print(f"✅ ファイルバックアップから株式データを完全復元しました。（銘柄数: {len(stocks_db)}）")
-                            break
-                    except Exception as e:
-                        print(f"❌ ファイルバックアップ解析エラー: {e}")
-            if found_backup:
-                break
+    # 過去のメッセージを古い順（oldest_first=True）に取得して解析
+    async for message in channel.history(limit=5000, oldest_first=True):
+        # Bot自身の埋め込みメッセージのみを対象とする
+        if message.author.id != bot.user.id or not message.embeds:
+            continue
+        
+        embed = message.embeds[0]
+        # 変動通知（付与、消費、仕事など）を解析
+        if embed.title and "ポイント変動通知" in embed.title:
+            target_field = None
+            change_field = None
+            reason_field = "システムによる操作"
 
-        # 2. テキスト形式バックアップの読み込み（見出しやコード枠を柔軟に判定）
-        if msg.content and "STOCK_DB_BACKUP" in msg.content:
-            try:
-                content = msg.content
-                start_idx = content.find('{')
-                end_idx = content.rfind('}')
+            for field in embed.fields:
+                if field.name == "対象者ID":
+                    target_field = field.value
+                elif field.name == "変動値":
+                    change_field = field.value
+                elif field.name in ["理由", "使用用途（理由）"]:
+                    reason_field = field.value
+
+            if target_field and change_field:
+                # ユーザーIDをクリーン（メンションや文字列から数字のみ抽出）
+                user_id_str = "".join(filter(str.isdigit, target_field))
+                try:
+                    change_amount = int(change_field.replace(" pt", "").replace("+", "").replace(" ", ""))
+                except ValueError:
+                    continue
+
+                if user_id_str not in temp_data:
+                    temp_data[user_id_str] = {"points": 0, "logs": []}
+
+                # ポイントを合算・計算
+                temp_data[user_id_str]["points"] += change_amount
                 
-                if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
-                    json_str = content[start_idx:end_idx + 1]
-                    data = json.loads(json_str)
-                    
-                    if isinstance(data, dict) and data.get("type") == "STOCK_DB_BACKUP":
-                        stocks_db = data.get("stocks_db", {})
-                        user_stocks = data.get("user_stocks", {})
-                        found_backup = True
-                        print(f"✅ テキストバックアップから株式データを完全復元しました。（銘柄数: {len(stocks_db)}）")
-                        break
-            except Exception as e:
-                print(f"❌ テキストバックアップ解析エラー: {e}")
+                # 履歴用ログを復元
+                time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
+                sign = "+" if change_amount >= 0 else ""
+                emoji = "🪙" if change_amount >= 0 else "💸"
+                log_entry = f"[{time_str}] {emoji} {sign}{change_amount} pt ({reason_field})"
+                temp_data[user_id_str]["logs"].append(log_entry)
+                
+                count += 1
 
-    if not found_backup:
-        print("ℹ️ 有効な株式バックアップが見つからなかったため、新規状態で開始します。")
+    points_data = temp_data
+    save_points()
+    print(f"【データベース】同期完了！計 {count} 件のログから {len(points_data)} 人分のデータを復元しました。")
+
 
 # ==========================================
-# 📈 株式価格の自動更新タスク (15分周期)
+# ポイントデータ管理関数（ファイル保存）
 # ==========================================
-@tasks.loop(minutes=15)
-async def stock_price_update_task(bot: commands.Bot):
-    if not stocks_db:
-        return
+def load_points():
+    global points_data
+    if os.path.exists(POINTS_FILE):
+        try:
+            with open(POINTS_FILE, "r", encoding="utf-8") as f:
+                points_data = json.load(f)
+                print("【システム】ローカルのポイントデータを読み込みました。")
+                return
+        except Exception as e:
+            print(f"データ読み込み失敗: {e}")
+    points_data = {}
 
-    for cid, data in stocks_db.items():
-        current_price = data["buy_price"]
+def save_points():
+    try:
+        with open(POINTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(points_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"データ保存失敗: {e}")
 
-        # 1. 指定の確率・変動率で計算
-        rand_val = random.random()
-        if rand_val < 0.01:
-            # 1%: 大暴騰 (+200%)
-            rate = 2.00
-        elif rand_val < 0.21:
-            # 20%: 高騰 (+30% 〜 +50%)
-            rate = random.uniform(0.30, 0.50)
-        elif rand_val < 0.50:
-            # 29%: 上昇 (+10% 〜 +30%)
-            rate = random.uniform(0.10, 0.30)
-        else:
-            # 50%: 下落 (-1% 〜 -50%)
-            rate = random.uniform(-0.50, -0.01)
+def get_user_data(user_id: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+        save_points()
+    return points_data[user_id]
 
-        # 2. 新しい価格の計算
-        new_buy_price = round(current_price * (1 + rate))
-        if new_buy_price < 1:
-            new_buy_price = 1
+def update_user_data(user_id: str, points: int, log_entry: str):
+    if user_id not in points_data:
+        points_data[user_id] = {"points": 0, "logs": []}
+    points_data[user_id]["points"] = points
+    points_data[user_id]["logs"].append(log_entry)
+    save_points()
 
-        new_sell_price = round(new_buy_price * 0.90)
-        if new_sell_price < 1:
-            new_sell_price = 1
-
-        # 3. データの更新
-        data["buy_price"] = new_buy_price
-        data["sell_price"] = new_sell_price
-
-        # 4. 履歴の更新 (最新価格を保持)
-        if "history" not in data:
-            data["history"] = [new_buy_price, new_buy_price, new_buy_price]
-
-        data["history"].append(new_buy_price)
-        if len(data["history"]) > 3:
-            data["history"].pop(0)
-
-    # 5. Discordへ自動保存
-    await save_stocks_to_discord(bot)
 
 # ==========================================
-# 🔘 UIコンポーネント (Modal & View)
+# [DM用] 改善点・問題点の入力モーダル
 # ==========================================
+class FeedbackModal(discord.ui.Modal):
+    def __init__(self, rating_stars: int, user_id: int):
+        super().__init__(title="問い合わせへのフィードバック")
+        self.rating_stars = rating_stars
+        self.user_id = user_id
 
-# --- Modmail 補助 View ---
+    feedback_text = discord.ui.TextInput(
+        label="改善点・問題点があればご記入ください",
+        style=discord.TextStyle.paragraph,
+        placeholder="ここに入力してください（任意）",
+        required=False,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        stars_str = "⭐" * self.rating_stars if self.rating_stars > 0 else "🖤 (星0)"
+        embed = discord.Embed(
+            title="📊 問い合わせ評価・フィードバック受信",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 評価ユーザー", value=f"<@{self.user_id}> (`{self.user_id}`)", inline=False)
+        embed.add_field(name="⭐ 満足度評価", value=f"**{stars_str}** ({self.rating_stars}/5)", inline=False)
+        embed.add_field(name="💬 改善点・問題点", value=self.feedback_text.value or "*記述なし*", inline=False)
+
+        rating_channel = interaction.client.get_channel(RATING_CHANNEL_ID)
+        if rating_channel:
+            await rating_channel.send(embed=embed)
+        await interaction.followup.send("ご協力ありがとうございました！", ephemeral=True)
+
+
+# ==========================================
+# [DM用] 星評価（0〜5）のボタン
+# ==========================================
+class StarRatingView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=600)
+        self.user_id = user_id
+
+    async def handle_rating(self, interaction: discord.Interaction, stars: int):
+        for child in self.children:
+            child.disabled = True
+        await interaction.message.edit(view=self)
+        await interaction.response.send_modal(FeedbackModal(rating_stars=stars, user_id=self.user_id))
+
+    @discord.ui.button(label="⭐0", style=discord.ButtonStyle.secondary, custom_id="star_0")
+    async def star0(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 0)
+    @discord.ui.button(label="⭐1", style=discord.ButtonStyle.danger, custom_id="star_1")
+    async def star1(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 1)
+    @discord.ui.button(label="⭐2", style=discord.ButtonStyle.danger, custom_id="star_2")
+    async def star2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 2)
+    @discord.ui.button(label="⭐3", style=discord.ButtonStyle.success, custom_id="star_3")
+    async def star3(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 3)
+    @discord.ui.button(label="⭐4", style=discord.ButtonStyle.success, custom_id="star_4")
+    async def star4(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 4)
+    @discord.ui.button(label="⭐5", style=discord.ButtonStyle.primary, custom_id="star_5")
+    async def star5(self, interaction: discord.Interaction, button: discord.ui.Button): await self.handle_rating(interaction, 5)
+
+
+# ==========================================
+# [DM用] クローズ同意ボタン
+# ==========================================
 class CloseRequestConfirmView(discord.ui.View):
-    def __init__(self, channel_id, user_id, channel_name, staff_mention):
+    def __init__(self, channel_id: int, user_id: int, channel_name: str, staff_mention: str):
         super().__init__(timeout=None)
         self.channel_id = channel_id
         self.user_id = user_id
         self.channel_name = channel_name
         self.staff_mention = staff_mention
 
-class StarRatingView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=None)
-        self.user_id = user_id
+    @discord.ui.button(label="🔒 閉じる", style=discord.ButtonStyle.danger, custom_id="user_confirm_close")
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bot = interaction.client
+        ticket_channel = bot.get_channel(self.channel_id)
+        
+        button.disabled = True
+        button.label = "クローズされました"
+        await interaction.message.edit(view=self)
+        await interaction.response.defer()
 
+        log_lines = []
+        if ticket_channel:
+            await ticket_channel.send("🔒 ユーザーがクローズを承諾しました。ログをエクスポート中...")
+            async for msg in ticket_channel.history(limit=100, oldest_first=True):
+                if msg.embeds:
+                    for emb in msg.embeds:
+                        author_name = emb.author.name if emb.author else "システム"
+                        log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
+                elif msg.content:
+                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+
+        full_log_text = "\n".join(log_lines)
+
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title=f"🔒 チケットクローズログ: {self.channel_name}",
+                description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`/closereq`)",
+                color=discord.Color.red(), timestamp=datetime.now()
+            )
+            if len(full_log_text) > 3000 or len(full_log_text) == 0:
+                with io.StringIO(full_log_text) as f:
+                    file = discord.File(f, filename=f"log-{self.channel_name}.txt")
+                    await log_channel.send(embed=log_embed, file=file)
+            else:
+                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
+                await log_channel.send(embed=log_embed)
+
+        if ticket_channel:
+            await asyncio.sleep(2)
+            await ticket_channel.delete()
+
+        rating_embed = discord.Embed(
+            title="📝 問い合わせ評価のお願い",
+            description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
+            color=discord.Color.gold()
+        )
+        rating_view = StarRatingView(user_id=self.user_id)
+        await interaction.followup.send(embed=rating_embed, view=rating_view)
+
+
+# ==========================================
+# スタッフ用：担当者登録用ボタン
+# ==========================================
 class SupportClaimView(discord.ui.View):
-    def __init__(self, user_id, user_name):
+    def __init__(self, user_id: int, user_name: str):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.user_name = user_name
 
-
-# --- 管理者用 KABU パネル Modal & View ---
-class CreateCompanyModal(discord.ui.Modal, title="新規会社の登録"):
-    cid = discord.ui.TextInput(label="会社ID (半角英数)", placeholder="例: company_a", required=True)
-    cname = discord.ui.TextInput(label="会社名", placeholder="例: AAA株式会社", required=True)
-    buy_p = discord.ui.TextInput(label="初期購入価格(pt)", placeholder="1000", required=True)
-    stock_cnt = discord.ui.TextInput(label="初期発行株式数", placeholder="100", required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            b_price = int(self.buy_p.value)
-            s_cnt = int(self.stock_cnt.value)
-            s_price = round(b_price * 0.90)
-        except ValueError:
-            await interaction.response.send_message("❌ 価格と株式数は半角数字で入力してください。", ephemeral=True)
+    @discord.ui.button(label="🙋‍♂️ 担当する", style=discord.ButtonStyle.primary, custom_id="claim_ticket")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.channel
+        if "-with-" in channel.name:
+            await interaction.response.send_message("❌ このチケットは既に他のスタッフが担当しています。", ephemeral=True)
             return
 
-        cid_str = self.cid.value.strip()
-        stocks_db[cid_str] = {
-            "name": self.cname.value.strip(),
-            "buy_price": b_price,
-            "sell_price": s_price,
-            "stock": s_cnt,
-            "is_active": True,
-            "history": [b_price, b_price, b_price]
-        }
-        await save_stocks_to_discord(interaction.client)
-        await interaction.response.send_message(f"✅ 会社 `{self.cname.value}` (ID: `{cid_str}`) を作成しました。", ephemeral=True)
-
-class AdminKabuPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="➕ 新規会社作成", style=discord.ButtonStyle.success)
-    async def create_company(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(CreateCompanyModal())
-
-
-# --- ユーザー購入・売却 Modal & View ---
-class BuyStockModal(discord.ui.Modal):
-    def __init__(self, company_id: str):
-        comp = stocks_db[company_id]
-        super().__init__(title=f"株式購入 - {comp['name']}")
-        self.company_id = company_id
-        self.amount_input = discord.ui.TextInput(
-            label=f"購入株数 (単価: {comp['buy_price']:,} pt / 在庫: {comp['stock']:,})",
-            placeholder="購入数を入力",
-            required=True
-        )
-        self.add_item(self.amount_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            amount = int(self.amount_input.value)
-            if amount <= 0:
-                raise ValueError()
-        except ValueError:
-            await interaction.response.send_message("❌ 1以上の有効な数値を入力してください。", ephemeral=True)
-            return
-
-        comp = stocks_db.get(self.company_id)
-        if not comp or not comp["is_active"]:
-            await interaction.response.send_message("❌ この株式は現在購入できません。", ephemeral=True)
-            return
-
-        if comp["stock"] < amount:
-            await interaction.response.send_message(f"❌ 在庫が不足しています。(現在在庫: {comp['stock']:,} 株)", ephemeral=True)
-            return
-
-        total_cost = comp["buy_price"] * amount
-        u_id = str(interaction.user.id)
-        u_data = get_user_data(u_id)
-
-        if u_data["points"] < total_cost:
-            await interaction.response.send_message(f"❌ ポイントが不足しています。(必要: {total_cost:,} pt / 所持: {u_data['points']:,} pt)", ephemeral=True)
-            return
-
-        u_data["points"] -= total_cost
-        comp["stock"] -= amount
+        staff = interaction.user
+        new_channel_name = f"{self.user_name.lower()}-with-{staff.name.lower()}"
+        await channel.edit(name=new_channel_name, topic=f"User ID: {self.user_id} | Staff ID: {staff.id}")
         
-        if u_id not in user_stocks:
-            user_stocks[u_id] = {}
-        user_stocks[u_id][self.company_id] = user_stocks[u_id].get(self.company_id, 0) + amount
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        u_data["logs"].append(f"[{now_str}] 📈 株式購入: {comp['name']} x{amount}株 (-{total_cost:,} pt)")
-
-        await save_stocks_to_discord(interaction.client)
-
-        embed = discord.Embed(title="✅ 株式購入完了", color=discord.Color.green())
-        embed.add_field(name="購入銘柄", value=comp["name"])
-        embed.add_field(name="購入数", value=f"{amount:,} 株")
-        embed.add_field(name="支払ポイント", value=f"{total_cost:,} pt")
-        embed.add_field(name="残高ポイント", value=f"{u_data['points']:,} pt", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class UserBuySelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-        options = []
-        for cid, data in stocks_db.items():
-            if data["is_active"] and data["stock"] > 0:
-                options.append(discord.SelectOption(
-                    label=f"{data['name']} ({data['buy_price']:,} pt)",
-                    value=cid,
-                    description=f"在庫: {data['stock']:,} 株"
-                ))
-
-        if options:
-            select = discord.ui.Select(placeholder="購入したい会社を選択...", options=options[:25])
-            select.callback = self.select_callback
-            self.add_item(select)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        cid = interaction.data["values"][0]
-        await interaction.response.send_modal(BuyStockModal(cid))
-
-class SellStockModal(discord.ui.Modal):
-    def __init__(self, company_id: str, max_amount: int):
-        comp = stocks_db[company_id]
-        super().__init__(title=f"株式売却 - {comp['name']}")
-        self.company_id = company_id
-        self.max_amount = max_amount
-        self.amount_input = discord.ui.TextInput(
-            label=f"売却株数 (買取単価: {comp['sell_price']:,} pt / 保有: {max_amount:,})",
-            placeholder="売却数を入力",
-            required=True
-        )
-        self.add_item(self.amount_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
+        button.label = f"担当者: {staff.name}"
+        button.style = discord.ButtonStyle.success
+        button.disabled = True
+        await interaction.message.edit(view=self)
+        
+        await interaction.response.send_message(f"🤝 {staff.mention} が担当者になりました。通常発言がユーザーに転送されます。")
+        
         try:
-            amount = int(self.amount_input.value)
-            if amount <= 0 or amount > self.max_amount:
-                raise ValueError()
-        except ValueError:
-            await interaction.response.send_message(f"❌ 1 〜 {self.max_amount:,} の範囲で数値を入力してください。", ephemeral=True)
+            user = await interaction.client.fetch_user(self.user_id)
+            if user:
+                embed = discord.Embed(
+                    description=f"💁‍♂️ あなたの問い合わせの担当者が **{staff.mention}** に決定しました。\n用件をそのままお話しください。",
+                    color=discord.Color.green()
+                )
+                await user.send(embed=embed)
+        except Exception as e:
+            await channel.send(f"⚠️ ユーザーへのDM通知に失敗: {e}")
+
+
+# ==========================================
+# Modmail コアロジック (イベント処理)
+# ==========================================
+def setup_modmail_events(bot: commands.Bot):
+
+    @bot.event
+    async def on_message(message: discord.Message):
+        if message.author.bot:
             return
 
-        comp = stocks_db.get(self.company_id)
-        u_id = str(interaction.user.id)
-        u_data = get_user_data(u_id)
+        # 1. ユーザー ➡ BotへのDM
+        if isinstance(message.channel, discord.DMChannel):
+            if not bot.guilds: return
+            guild = bot.guilds[0]
+            category = guild.get_channel(INBOX_CATEGORY_ID)
+            if not category: return
 
-        total_return = comp["sell_price"] * amount
-        u_data["points"] += total_return
-        comp["stock"] += amount
-        user_stocks[u_id][self.company_id] -= amount
+            existing_channel = None
+            for ch in category.text_channels:
+                if ch.topic and f"User ID: {message.author.id}" in ch.topic:
+                    existing_channel = ch
+                    break
 
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        u_data["logs"].append(f"[{now_str}] 💸 株式売却: {comp['name']} x{amount}株 (+{total_return:,} pt)")
+            if not existing_channel:
+                channel_name = f"{message.author.name.lower()}"
+                
+                staff_role = guild.get_role(ADMIN_ROLE_ID)
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+                if staff_role:
+                    overwrites[staff_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_messages=True)
 
-        await save_stocks_to_discord(interaction.client)
+                existing_channel = await guild.create_text_channel(
+                    name=channel_name, category=category, topic=f"User ID: {message.author.id}", overwrites=overwrites
+                )
 
-        embed = discord.Embed(title="✅ 株式売却完了", color=discord.Color.gold())
-        embed.add_field(name="売却銘柄", value=comp["name"])
-        embed.add_field(name="売却数", value=f"{amount:,} 株")
-        embed.add_field(name="受取ポイント", value=f"+{total_return:,} pt")
-        embed.add_field(name="現在の残高", value=f"{u_data['points']:,} pt", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+                dm_welcome = discord.Embed(
+                    title="📩 問い合わせを受け付けました",
+                    description="サーバー運営チームにメッセージが転送されました。\n担当者が決定するまでしばらくお待ちください。",
+                    color=discord.Color.blue()
+                )
+                await message.channel.send(embed=dm_welcome)
 
-class UserSellSelectView(discord.ui.View):
-    def __init__(self, user_id_str: str):
-        super().__init__(timeout=180)
-        options = []
-        owned = user_stocks.get(user_id_str, {})
-        for cid, amount in owned.items():
-            if amount > 0 and cid in stocks_db:
-                comp = stocks_db[cid]
-                options.append(discord.SelectOption(
-                    label=f"{comp['name']} (保有: {amount:,} 株)",
-                    value=cid,
-                    description=f"買取単価: {comp['sell_price']:,} pt"
-                ))
+                member = guild.get_member(message.author.id)
+                roles_str = ", ".join([r.mention for r in member.roles if r != guild.default_role]) if member else "取得不可"
+                join_at = member.joined_at.strftime('%Y/%m/%d %H:%M') if member and member.joined_at else "不明"
 
-        if options:
-            select = discord.ui.Select(placeholder="売却したい会社を選択...", options=options[:25])
-            select.callback = self.select_callback
-            self.add_item(select)
+                info_embed = discord.Embed(title="📩 新規問い合わせチケット", color=discord.Color.orange())
+                info_embed.add_field(name="👤 ユーザー名", value=f"{message.author.mention} ({message.author})", inline=True)
+                info_embed.add_field(name="🆔 ユーザーID", value=f"`{message.author.id}`", inline=True)
+                info_embed.add_field(name="📅 サーバー参加日", value=join_at, inline=False)
+                info_embed.add_field(name="🛡️ 所持ロール", value=roles_str or "なし", inline=False)
+                info_embed.add_field(name="💬 メッセージ", value=message.content, inline=False)
 
-    async def select_callback(self, interaction: discord.Interaction):
-        cid = interaction.data["values"][0]
-        u_id = str(interaction.user.id)
-        max_amount = user_stocks.get(u_id, {}).get(cid, 0)
-        await interaction.response.send_modal(SellStockModal(cid, max_amount))
-
-
-# ==========================================
-# 🎰 スロット機能 Modals & Views
-# ==========================================
-class SlotBetModal(discord.ui.Modal, title="🎰 賭けポイントの設定"):
-    bet_input = discord.ui.TextInput(
-        label="賭けるポイント数を入力してください",
-        placeholder="例: 100",
-        min_length=1,
-        max_length=10,
-        required=True
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            bet_amount = int(self.bet_input.value)
-            if bet_amount <= 0:
-                await interaction.response.send_message("❌ 1ポイント以上を指定してください。", ephemeral=True)
+                view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
+                await existing_channel.send(embed=info_embed, view=view)
+                await message.add_reaction("✅")
                 return
-        except ValueError:
-            await interaction.response.send_message("❌ 半角数字で有効な数値を入力してください。", ephemeral=True)
-            return
 
-        user_data = get_user_data(str(interaction.user.id))
-        if user_data["points"] < bet_amount:
-            await interaction.response.send_message(f"❌ ポイントが不足しています。（現在の所持: {user_data['points']:,} pt）", ephemeral=True)
-            return
+            user_embed = discord.Embed(description=message.content, color=discord.Color.green())
+            user_embed.set_author(name=f"{message.author} (DM)", icon_url=message.author.display_avatar.url)
+            await existing_channel.send(embed=user_embed)
+            await message.add_reaction("✅")
 
-        view: SlotMainView = self.view
-        view.user_bets[interaction.user.id] = bet_amount
+        # 2. スタッフ側の発言 ➡ ユーザーのDMへ転送
+        elif isinstance(message.channel, discord.TextChannel) and message.channel.category_id == INBOX_CATEGORY_ID:
+            if message.content.startswith("/"): return
+            if not message.channel.topic or "User ID:" not in message.channel.topic: return
 
-        await interaction.response.send_message(
-            f"✅ 賭けポイントを **{bet_amount:,} pt** に設定しました！\n「🎰 スロットスタート」ボタンを押してゲームを開始してください。",
-            ephemeral=True
-        )
+            try:
+                parts = message.channel.topic.split("|")
+                u_id = int(parts[0].replace("User ID:", "").strip())
+                user = await bot.fetch_user(u_id)
+            except: return
 
+            staff_embed = discord.Embed(description=message.content, color=discord.Color.blue())
+            staff_embed.set_author(name="ダイヤ作成所", icon_url=message.guild.icon.url if message.guild.icon else None)
+            
+            try:
+                await user.send(embed=staff_embed)
+                await message.add_reaction("✈️")
+            except discord.Forbidden:
+                await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
-class SlotMainView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.user_bets = {}
-        self.jp_chance = {}
-
-    @discord.ui.button(label="🪙 賭けるポイントを設定", style=discord.ButtonStyle.primary, custom_id="slot_set_bet")
-    async def set_bet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = SlotBetModal()
-        modal.view = self
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="🎰 スロットスタート", style=discord.ButtonStyle.success, custom_id="slot_start")
-    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-        bet_amount = self.user_bets.get(user_id, 0)
-
-        if bet_amount <= 0:
-            await interaction.response.send_message("❌ 先に「🪙 賭けるポイントを設定」ボタンから賭けポイントを設定してください。", ephemeral=True)
-            return
-
-        user_id_str = str(user_id)
-        user_data = get_user_data(user_id_str)
-
-        if user_data["points"] < bet_amount:
-            await interaction.response.send_message(f"❌ ポイントが不足しています。（現在の所持: {user_data['points']:,} pt）", ephemeral=True)
-            return
-
-        await interaction.response.defer()
-
-        symbols = ["🇯🇵", "🇺🇸", "💎", "🔔", "🚃"]
-        reel = [random.choice(symbols) for _ in range(3)]
-        reel_str = f"|  {reel[0]}  |  {reel[1]}  |  {reel[2]}  |"
-
-        symbol_counts = {s: reel.count(s) for s in set(reel)}
-        max_count = max(symbol_counts.values())
-
-        payout_multiplier = 0
-        result_title = ""
-        result_color = discord.Color.red()
-        jp_message = ""
-
-        is_in_jp_chance = self.jp_chance.get(user_id, False)
-
-        if max_count == 3:
-            if is_in_jp_chance:
-                payout_multiplier = 20
-                result_title = "🎉💎 JACKPOT (2回連続3つ揃い)!! 💎🎉"
-                result_color = discord.Color.gold()
-                jp_message = "🔥 **超大暴走！2回連続3つ揃いでジャックポット獲得！！**"
-                self.jp_chance[user_id] = False
-            else:
-                payout_multiplier = 5
-                result_title = "🎊 3つ揃い！ 大勝利！ 🎊"
-                result_color = discord.Color.green()
-                jp_message = "⚡ **JACKPOT CHANCE発動！** 次回も3つ揃いが出れば **20倍**！！"
-                self.jp_chance[user_id] = True
-        elif max_count == 2:
-            payout_multiplier = 2
-            result_title = "✨ 2つ揃い！ WIN! ✨"
-            result_color = discord.Color.blue()
-            if is_in_jp_chance:
-                jp_message = "※ジャックポットチャンスは失敗しました。"
-            self.jp_chance[user_id] = False
-        else:
-            payout_multiplier = 0
-            result_title = "💀 残念... 没収！ 💀"
-            result_color = discord.Color.dark_gray()
-            if is_in_jp_chance:
-                jp_message = "※ジャックポットチャンスは失敗しました。"
-            self.jp_chance[user_id] = False
-
-        payout_points = bet_amount * payout_multiplier
-        net_change = payout_points - bet_amount
-        new_points = user_data["points"] + net_change
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        if net_change > 0:
-            log_entry = f"[{now_str}] 🎰 スロット勝利 (+{net_change:,} pt / {reel[0]}{reel[1]}{reel[2]})"
-        elif net_change < 0:
-            log_entry = f"[{now_str}] 🎰 スロット敗北 ({net_change:,} pt / {reel[0]}{reel[1]}{reel[2]})"
-        else:
-            log_entry = f"[{now_str}] 🎰 スロット引き分け (±0 pt / {reel[0]}{reel[1]}{reel[2]})"
-
-        update_user_data(user_id_str, new_points, log_entry)
-
-        desc = f"### 🎰 【 {reel_str} 】 🎰\n\n"
-        if jp_message:
-            desc += f"{jp_message}\n\n"
-
-        res_embed = discord.Embed(
-            title=result_title,
-            description=desc,
-            color=result_color,
-            timestamp=datetime.now()
-        )
-        res_embed.add_field(name="賭けポイント", value=f"`{bet_amount:,} pt`", inline=True)
-        res_embed.add_field(name="獲得ポイント", value=f"`{payout_points:,} pt` (倍率: {payout_multiplier}倍)", inline=True)
-        res_embed.add_field(name="現在の総保有", value=f"`{new_points:,} pt`", inline=False)
-
-        await interaction.followup.send(content=interaction.user.mention, embed=res_embed)
+        # 他のコグや標準コマンドが動くようにイベントをパスする
+        await bot.process_commands(message)
 
 
 # ==========================================
-# 🚀 設定＆スラッシュコマンド定義
+# 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
 def setup_slash_commands(bot: commands.Bot):
+    # 最初はローカルを読み込む
     load_points()
+    
+    # 💡 非同期でDiscordチャンネルからデータを完全に同期（再起動対策）
+    asyncio.create_task(sync_points_from_discord(bot))
+    
+    # メッセージイベントを設定
+    setup_modmail_events(bot)
 
-    # ------------------------------------------
-    # 👑 1. 管理者専用 プレフィックスコマンド (!)
-    # ------------------------------------------
-    @bot.command(name="kabu")
-    async def admin_kabu(ctx: commands.Context):
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in ctx.author.roles):
-            await ctx.send("❌ このコマンドを実行する権限（管理者ロール）がありません。")
-            return
-
-        embed = discord.Embed(
-            title="⚙️ 株式市場 管理専用パネル",
-            description="会社の新規作成、株価の手動変更、販売の開始/停止、削除ができます。",
-            color=discord.Color.dark_theme()
-        )
-
-        lines = []
-        for cid, data in stocks_db.items():
-            status = "🟢 販売中" if data["is_active"] else "🔴 販売停止"
-            lines.append(f"• **{data['name']}** (ID: `{cid}`): 購入 `{data['buy_price']:,}pt` / 売却 `{data['sell_price']:,}pt` [{status}]")
-        
-        embed.add_field(name="📋 登録中の会社一覧", value="\n".join(lines) or "登録された会社はありません", inline=False)
-        await ctx.send(embed=embed, view=AdminKabuPanelView())
-
-    @bot.command(name="savekabu")
-    async def force_save_kabu(ctx: commands.Context):
-        """【管理者専用】現在の株式データを手動でログチャンネルへ保存"""
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in ctx.author.roles):
-            await ctx.send("❌ 権限がありません。")
-            return
-
-        await save_stocks_to_discord(bot)
-        await ctx.send("✅ 株式データをログチャンネルへ即時保存しました！")
-
-    @bot.command(name="sendmessage")
-    async def send_message_cmd(ctx: commands.Context, channel_id: int, *, content: str):
-        if not any(role.id == ADMIN_ROLE_ID_POINTS for role in ctx.author.roles):
-            await ctx.send("❌ このコマンドを実行する権限（管理者ロール）がありません。")
-            return
-
-        target_channel = bot.get_channel(channel_id)
-        if not target_channel:
-            try:
-                target_channel = await bot.fetch_channel(channel_id)
-            except Exception:
-                await ctx.send("❌ 指定されたチャンネルが見つからないか、Botにアクセス権限がありません。")
-                return
-
-        try:
-            await target_channel.send(content)
-            await ctx.send(f"✅ <#{channel_id}> にメッセージを送信しました。")
-        except Exception as e:
-            await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
-
-    # ------------------------------------------
-    # 📨 2. Modmail系 スラッシュコマンド
-    # ------------------------------------------
+    # --- /closereq コマンド ---
     @bot.tree.command(name="closereq", description="ユーザーにクローズ確認リクエストを送信します")
     async def close_request(interaction: discord.Interaction):
         channel = interaction.channel
@@ -635,6 +436,7 @@ def setup_slash_commands(bot: commands.Bot):
         except discord.Forbidden:
             await interaction.followup.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
 
+    # --- /close コマンド ---
     @bot.tree.command(name="close", description="チケットを強制クローズします")
     async def close_ticket(interaction: discord.Interaction):
         channel = interaction.channel
@@ -696,6 +498,7 @@ def setup_slash_commands(bot: commands.Bot):
         await asyncio.sleep(2)
         await channel.delete()
 
+    # --- /change_staff コマンド ---
     @bot.tree.command(name="change_staff", description="チケットの担当スタッフをリセットして交代します")
     async def change_staff(interaction: discord.Interaction):
         channel = interaction.channel
@@ -719,9 +522,12 @@ def setup_slash_commands(bot: commands.Bot):
         reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
         await interaction.response.send_message(embed=reset_embed, view=new_view)
 
-    # ------------------------------------------
-    # 🪙 3. ポイントシステム スラッシュコマンド
-    # ------------------------------------------
+
+    # ==========================================
+    # ポイントシステム スラッシュコマンド
+    # ==========================================
+
+    # --- /work コマンド ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
     @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
     async def work_command(interaction: discord.Interaction):
@@ -753,6 +559,7 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
+        # 💡 同期用のポイントデータベースチャンネルに必ず解析可能なログを送る
         log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
         if log_channel:
             noti_embed = discord.Embed(title="📥 ポイント変動通知 (お仕事)", color=discord.Color.green(), timestamp=datetime.now())
@@ -778,6 +585,7 @@ def setup_slash_commands(bot: commands.Bot):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
     @app_commands.describe(user="ポイントを確認したいユーザーを指定（未指定で自分）")
     async def points_command(interaction: discord.Interaction, user: discord.User = None):
@@ -793,6 +601,7 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
+    # --- /pointlog コマンド ---
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     @app_commands.describe(user="履歴を確認したいユーザーを指定（未指定で自分）")
     async def pointlog_command(interaction: discord.Interaction, user: discord.User = None):
@@ -824,10 +633,13 @@ def setup_slash_commands(bot: commands.Bot):
             embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
 
+    # --- /rankings コマンド ---
     @bot.tree.command(name="rankings", description="ポイントの所持数ランキング上位10名を表示します")
     async def rankings_command(interaction: discord.Interaction):
+        # 全員に見える公開メッセージとして送信（ephemeral=False）
         await interaction.response.defer(ephemeral=False)
 
+        # 1ポイント以上のユーザーのみ抽出
         filtered_users = [
             (user_id, data) for user_id, data in points_data.items()
             if data.get("points", 0) >= 1
@@ -842,6 +654,7 @@ def setup_slash_commands(bot: commands.Bot):
             await interaction.followup.send(embed=embed)
             return
 
+        # ポイントが多い順にソート
         sorted_users = sorted(filtered_users, key=lambda item: item[1].get("points", 0), reverse=True)
         top_10 = sorted_users[:10]
 
@@ -875,6 +688,7 @@ def setup_slash_commands(bot: commands.Bot):
 
         await interaction.followup.send(embed=embed)
 
+    # --- /give_points コマンド ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
     @app_commands.describe(user="付与する対象のユーザー", amount="増やすポイント数", reason="付与する理由・説明")
     async def give_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
@@ -908,6 +722,7 @@ def setup_slash_commands(bot: commands.Bot):
             noti_embed.add_field(name="理由", value=reason, inline=False)
             await log_channel.send(embed=noti_embed)
 
+    # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
     @app_commands.describe(user="消費させる対象のユーザー", amount="減らすポイント数", reason="消費する理由・目的")
     async def take_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
@@ -940,142 +755,3 @@ def setup_slash_commands(bot: commands.Bot):
             noti_embed.add_field(name="変動値", value=f"-{amount} pt", inline=True)
             noti_embed.add_field(name="使用用途（理由）", value=reason, inline=False)
             await log_channel.send(embed=noti_embed)
-
-    # ------------------------------------------
-    # 📈 4. 株式システム スラッシュコマンド (/kabu)
-    # ------------------------------------------
-    kabu_group = app_commands.Group(name="kabu", description="株式取引・情報コマンド")
-
-    @kabu_group.command(name="buy", description="販売中の株式を購入します")
-    async def kabu_buy(interaction: discord.Interaction):
-        view = UserBuySelectView()
-        if not view.children:
-            await interaction.response.send_message("❌ 現在購入できる会社はありません。", ephemeral=True)
-            return
-        await interaction.response.send_message("🏢 購入したい会社を選択してください:", view=view, ephemeral=True)
-
-    @kabu_group.command(name="sell", description="保有している株式を売却します")
-    async def kabu_sell(interaction: discord.Interaction):
-        user_id_str = str(interaction.user.id)
-        view = UserSellSelectView(user_id_str)
-        if not view.children:
-            await interaction.response.send_message("❌ 売却できる保有株がありません。", ephemeral=True)
-            return
-        await interaction.response.send_message("💸 売却したい会社を選択してください:", view=view, ephemeral=True)
-
-    @kabu_group.command(name="company", description="現在株を販売・売り出し中の会社一覧を表示します")
-    async def kabu_company(interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="🏢 現在株を販売中の会社一覧",
-            color=discord.Color.green(),
-            timestamp=datetime.now()
-        )
-
-        active_lines = []
-        for cid, data in stocks_db.items():
-            if data["is_active"]:
-                active_lines.append(
-                    f"🟢 **{data['name']}** (ID: `{cid}`)\n"
-                    f"├ 購入価格: **{data['buy_price']:,} pt** | 買取価格: **{data['sell_price']:,} pt**\n"
-                    f"└ 残り在庫: **{data['stock']:,} 株**\n"
-                )
-
-        if active_lines:
-            embed.description = "以下の会社で現在株の購入が可能です。\n`/kabu buy` で購入できます。\n\n" + "\n".join(active_lines)
-        else:
-            embed.description = "❌ 現在、株を販売している会社はありません。"
-
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-
-    @kabu_group.command(name="info", description="登録されている全会社の状況と自分の保有株を表示します")
-    async def kabu_info(interaction: discord.Interaction):
-        embed = discord.Embed(title="📊 株式市場 & ポートフォリオ情報", color=discord.Color.blue(), timestamp=datetime.now())
-
-        market_lines = []
-        for cid, data in stocks_db.items():
-            yesterday_p = data["history"][-1] if data.get("history") else data["buy_price"]
-            diff = data["buy_price"] - yesterday_p
-            pct = (diff / yesterday_p) * 100 if yesterday_p > 0 else 0
-            diff_str = f"🔺+{diff:,}pt (+{pct:.1f}%)" if diff > 0 else (f"🔻{diff:,}pt ({pct:.1f}%)" if diff < 0 else "➖ 変化なし")
-            
-            history_list = data.get("history", [data["buy_price"]])
-            history_str = " ➔ ".join([f"{p:,}pt" for p in history_list]) + f" ➔ **{data['buy_price']:,}pt**"
-            status_str = "🟢 販売中" if data["is_active"] else "🔴 販売停止中"
-
-            market_lines.append(
-                f"🏢 **{data['name']}** [{status_str}]\n"
-                f"├ 購入価格: **{data['buy_price']:,} pt** | 買取価格: **{data['sell_price']:,} pt** ({diff_str})\n"
-                f"├ 残り在庫: {data['stock']:,} 株\n"
-                f"└ 過去3日推移: `{history_str}`\n"
-            )
-
-        embed.add_field(name="🌐 登録全会社・市場状況", value="\n".join(market_lines) or "登録銘柄なし", inline=False)
-
-        user_id_str = str(interaction.user.id)
-        owned_dict = user_stocks.get(user_id_str, {})
-        portfolio_lines = []
-        total_eval = 0
-
-        for cid, amount in owned_dict.items():
-            if amount > 0 and cid in stocks_db:
-                comp = stocks_db[cid]
-                eval_val = amount * comp["sell_price"]
-                total_eval += eval_val
-                portfolio_lines.append(f"• **{comp['name']}**: {amount:,} 株 (売却想定額: `{eval_val:,} pt`)")
-
-        portfolio_text = "\n".join(portfolio_lines) if portfolio_lines else "*保有している株はありません*"
-        embed.add_field(name=f"💼 {interaction.user.display_name} さんの保有株式", value=f"{portfolio_text}\n\n**総売却可能評価額: `{total_eval:,} pt`**", inline=False)
-
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-
-    bot.tree.add_command(kabu_group)
-
-
-# ==========================================
-# 🏁 Bot起動エントリーポイント
-# ==========================================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# 設定のセットアップ実行
-setup_slash_commands(bot)
-
-@bot.event
-async def on_ready():
-    print(f"🤖 Botがログインしました: {bot.user} (ID: {bot.user.id})")
-    
-    # 1. バックアップログからデータを完全復元
-    await sync_points_from_discord(bot)
-    await sync_stocks_from_discord(bot)
-    
-    # 2. 定期タスクを安全に起動
-    if not stock_price_update_task.is_running():
-        stock_price_update_task.start(bot)
-        print("⏰ 株価自動更新タスクを起動しました。")
-        
-    # 3. 起動時のデータをログへ安全保存
-    await save_stocks_to_discord(bot)
-    
-    # 4. スラッシュコマンドをDiscordへ同期
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ スラッシュコマンドを {len(synced)} 件同期しました。")
-    except Exception as e:
-        print(f"❌ スラッシュコマンドの同期に失敗しました: {e}")
-
-# ==========================================
-# 💾 株式データの即時保存用ヘルパー関数
-# ==========================================
-async def auto_save_stocks(bot: commands.Bot):
-    """データ変更時にDiscordログチャンネルへ即時バックアップを実行"""
-    try:
-        await save_stocks_to_discord(bot)
-        print("✅ 株式データを即時バックアップしました。")
-    except Exception as e:
-        print(f"❌ 株式データの即時バックアップに失敗しました: {e}")
-
-# TOKENをセットして実行（★一番最後に置く★）
-# bot.run("YOUR_BOT_TOKEN")
