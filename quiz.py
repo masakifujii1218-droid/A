@@ -291,7 +291,8 @@ class AdminPanelEditView(discord.ui.View):
         view.add_item(select)
         await interaction.response.send_message("部署を選んでください：", view=view, ephemeral=True)
 
-    @discord.ui.button(label="🔄 募集ON/OFF切替", style=discord.ButtonStyle.warning)
+    @discord.ui.button(label="🔄 募集ON/OFF切替", style=discord.ButtonStyle.secondary)
+# または黄色っぽいオレンジ色にしたい場合は `.secondary` や `.primary` に変更します
     async def toggle_dept_open(self, interaction: discord.Interaction, button: discord.ui.Button):
         depts = CONFIG_DATA.get("departments", {})
         if not depts:
