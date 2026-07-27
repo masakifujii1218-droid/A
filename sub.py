@@ -533,9 +533,6 @@ class SlotMainView(discord.ui.View):
 def setup_slash_commands(bot: commands.Bot):
     load_points()
 
-    # 📈 株価自動更新タスクの開始
-    if not stock_price_update_task.is_running():
-
     # ------------------------------------------
     # 👑 1. 管理者専用 プレフィックスコマンド (!)
     # ------------------------------------------
