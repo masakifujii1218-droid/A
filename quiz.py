@@ -7,11 +7,29 @@ from discord.ext import commands
 
 # --- 各種ID設定 ---
 DEFAULT_CATEGORY_ID = 1513901626610553043  # チケット作成先カテゴリーID
-ADMIN_ROLE_ID = 1510405214811852900  # 管理者ロールID
-LOG_CHANNEL_ID = 1510042822533840936  # 面接回答ログ送信先チャンネルID
-DATA_CHANNEL_ID = 1526289865719943329  # 設定データ保存・復旧用チャンネルID
+LOG_CHANNEL_ID = 1510042822533840936       # 面接回答ログ送信先チャンネルID
+DATA_CHANNEL_ID = 1526289865719943329      # 設定データ保存・復旧用チャンネルID
+
+# 基準となるロールID（上層部ロールID）
+BASE_ADMIN_ROLE_ID = 1510405214811852900
 
 CONFIG_DATA = {"departments": {}}
+
+
+# ユーザーが「上層部」以上のロールまたは管理者権限を持っているか判定
+def is_admin(user: discord.Member) -> bool:
+    # Discordの「管理者(Administrator)」権限があれば無条件で許可
+    if user.guild_permissions.administrator:
+        return True
+
+    # サーバー内の「上層部」ロールを取得
+    base_role = user.guild.get_role(BASE_ADMIN_ROLE_ID)
+    if not base_role:
+        # 万が一基準ロールが見つからない場合はロール所持チェックでフォールバック
+        return any(role.id == BASE_ADMIN_ROLE_ID for role in user.roles)
+
+    # ユーザーが持っているロールの中に、上層部と同等かそれ以上の階層(position)のものがあるか確認
+    return any(role.position >= base_role.position for role in user.roles)
 
 
 # --- クラウド保存・復旧処理 (Discordチャンネル経由) ---
@@ -66,9 +84,8 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="🔒 チケットを閉じる", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        has_role = any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles)
-        if not (has_role or interaction.user.guild_permissions.administrator):
-            await interaction.response.send_message("❌ チケットを閉じる権限がありません（管理者専用）。", ephemeral=True)
+        if not is_admin(interaction.user):
+            await interaction.response.send_message("❌ チケットを閉じる権限がありません（上層部以上専用）。", ephemeral=True)
             return
 
         await interaction.response.send_message("⚠️ このチケットを 5秒後 に削除します...")
@@ -133,14 +150,18 @@ class DepartmentSelect(discord.ui.Select):
             await interaction.response.send_message(f"❌ 指定のカテゴリー(ID: {DEFAULT_CATEGORY_ID})が見つかりません。", ephemeral=True)
             return
 
-        admin_role = interaction.guild.get_role(ADMIN_ROLE_ID)
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+        # 「上層部」以上の階層を持つ全ロールにチケットの閲覧・送信権限を付与
+        base_role = interaction.guild.get_role(BASE_ADMIN_ROLE_ID)
+        if base_role:
+            for role in interaction.guild.roles:
+                if role.position >= base_role.position:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
         channel_name = f"求職-{interaction.user.name}"
         ticket_channel = await category.create_text_channel(name=channel_name, overwrites=overwrites)
@@ -207,16 +228,15 @@ class AddQuestionModal(discord.ui.Modal, title="質問の一括追加"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.dept_name in CONFIG_DATA["departments"]:
-            # 改行で分割して空行を除外
             new_questions = [q.strip() for q in self.q_text.value.split("\n") if q.strip()]
-            
+
             if not new_questions:
                 await interaction.response.send_message("⚠️ 質問テキストが入力されていません。", ephemeral=True)
                 return
 
             CONFIG_DATA["departments"][self.dept_name]["questions"].extend(new_questions)
             await save_config_to_discord(interaction.client)
-            
+
             count = len(new_questions)
             await interaction.response.send_message(f"✅ 『{self.dept_name}』に {count} 件の質問を追加・保存しました！", ephemeral=True)
 
@@ -312,9 +332,8 @@ class AdminPanelEditView(discord.ui.View):
 def setup_quiz_commands(bot):
     @bot.command(name="recommendadminpanel")
     async def recommend_admin_panel(ctx):
-        has_role = any(role.id == ADMIN_ROLE_ID for role in ctx.author.roles)
-        if not (has_role or ctx.author.guild_permissions.administrator):
-            await ctx.send("❌ このコマンドを使用する権限がありません（専用ロールが必要です）。")
+        if not is_admin(ctx.author):
+            await ctx.send("❌ このコマンドを使用する権限がありません（「上層部」以上のロールが必要です）。")
             return
 
         depts_summary = []
