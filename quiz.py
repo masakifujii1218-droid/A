@@ -1,362 +1,268 @@
-import io
+import discord
+from discord.ext import commands
 import json
 import os
-import discord
-from discord import app_commands
-from discord.ext import commands
+import asyncio
 
-# --- 各種ID設定 ---
-DEFAULT_CATEGORY_ID = 1513901626610553043  # チケット作成先カテゴリーID
-LOG_CHANNEL_ID = 1510042822533840936       # 面接回答ログ送信先チャンネルID
-DATA_CHANNEL_ID = 1526289865719943329      # 設定データ保存・復旧用チャンネルID
+# ==========================================
+# 永続化用チャンネル・メッセージ管理
+# ==========================================
+CONFIG_CHANNEL_ID = 1344265089330860124  # 設定保存用チャンネルID
+config_message_id = None
 
-# 基準となるロールID（上層部ロールID）
-BASE_ADMIN_ROLE_ID = 1510405214811852900
+# 初期設定データ構造
+quiz_config = {
+    "is_open": True,
+    "panel_channel_id": None,
+    "panel_message_id": None,
+    "admin_channel_id": None,
+    "admin_message_id": None,
+    "role_name": "自己推薦",
+    "questions": [
+        {
+            "id": 1,
+            "question": "志望動機・自己PRを教えてください。"
+        },
+        {
+            "id": 2,
+            "question": "得意なことやアピールしたい活動実績を教えてください。"
+        }
+    ]
+}
 
-CONFIG_DATA = {"departments": {}}
-
-
-# ユーザーが「上層部」以上のロールまたは管理者権限を持っているか判定
-def is_admin(user: discord.Member) -> bool:
-    # Discordの「管理者(Administrator)」権限があれば無条件で許可
-    if user.guild_permissions.administrator:
-        return True
-
-    # サーバー内の「上層部」ロールを取得
-    base_role = user.guild.get_role(BASE_ADMIN_ROLE_ID)
-    if not base_role:
-        # 万が一基準ロールが見つからない場合はロール所持チェックでフォールバック
-        return any(role.id == BASE_ADMIN_ROLE_ID for role in user.roles)
-
-    # ユーザーが持っているロールの中に、上層部と同等かそれ以上の階層(position)のものがあるか確認
-    return any(role.position >= base_role.position for role in user.roles)
-
-
-# --- クラウド保存・復旧処理 (Discordチャンネル経由) ---
-async def load_config_from_discord(bot):
-    global CONFIG_DATA
-    channel = bot.get_channel(DATA_CHANNEL_ID)
+async def save_config_to_discord(bot: commands.Bot):
+    """設定データを指定のチャンネルに保存する"""
+    global config_message_id
+    channel = bot.get_channel(CONFIG_CHANNEL_ID)
     if not channel:
-        print(f"⚠️ データ保存用チャンネル (ID: {DATA_CHANNEL_ID}) が見つかりません。")
+        print(f"❌ 設定保存用チャンネル (ID: {CONFIG_CHANNEL_ID}) が見つかりません。")
         return
 
-    async for msg in channel.history(limit=10):
-        if msg.attachments and msg.attachments[0].filename == "recommend_config.json":
-            content = await msg.attachments[0].read()
-            CONFIG_DATA = json.loads(content.decode("utf-8"))
-            print("✅ Discord保存用チャンネルから最新データを自動復旧しました！")
-            return
-    print("ℹ️ データが見つからなかったため初期化します。")
+    content = f"```json\n{json.dumps(quiz_config, ensure_ascii=False, indent=2)}\n```"
 
+    try:
+        if config_message_id:
+            try:
+                msg = await channel.fetch_message(config_message_id)
+                await msg.edit(content=content)
+                return
+            except discord.NotFound:
+                pass
+        
+        msg = await channel.send(content=content)
+        config_message_id = msg.id
+        print("✅ quiz.py の設定データをDiscordに保存しました。")
+    except Exception as e:
+        print(f"❌ quiz.py 設定保存エラー: {e}")
 
-async def save_config_to_discord(bot):
-    global CONFIG_DATA
-    channel = bot.get_channel(DATA_CHANNEL_ID)
+async def load_config_from_discord(bot: commands.Bot):
+    """起動時にDiscordから設定データを読み込む"""
+    global config_message_id, quiz_config
+    channel = bot.get_channel(CONFIG_CHANNEL_ID)
     if not channel:
-        print(f"❌ データ保存用チャンネル (ID: {DATA_CHANNEL_ID}) が見つかりません。")
+        print(f"⚠️ 設定保存用チャンネル (ID: {CONFIG_CHANNEL_ID}) が見つかりませんでした。初期値で動作します。")
         return
 
-    json_data = json.dumps(CONFIG_DATA, ensure_ascii=False, indent=2)
-    file = discord.File(
-        io.BytesIO(json_data.encode("utf-8")), filename="recommend_config.json"
-    )
-    await channel.send("📂 **【システムデータ自動バックアップ】**", file=file)
+    try:
+        async for msg in channel.history(limit=10):
+            if msg.author.id == bot.user.id and msg.content.startswith("```json"):
+                json_str = msg.content.strip("`").replace("json\n", "").strip()
+                quiz_config.update(json.loads(json_str))
+                config_message_id = msg.id
+                print("✅ quiz.py の設定データをDiscordから正常に復旧しました。")
+                break
+    except Exception as e:
+        print(f"❌ quiz.py 設定復旧エラー: {e}")
 
-
-# --- ユーザー情報Embed生成 ---
-def create_user_info_embed(member: discord.Member):
-    roles = [role.mention for role in member.roles if role != member.guild.default_role]
-    roles_str = ", ".join(roles) if roles else "なし"
-    joined_at = member.joined_at.strftime("%Y/%m/%d %H:%M") if member.joined_at else "不明"
-
-    embed = discord.Embed(title="📩 新規問い合わせチケット", color=discord.Color.blue())
-    embed.add_field(name="👤 ユーザー名", value=f"{member.mention} ({member.name})", inline=False)
-    embed.add_field(name="🆔 ユーザーID", value=f"`{member.id}`", inline=False)
-    embed.add_field(name="📅 サーバー参加日", value=joined_at, inline=False)
-    embed.add_field(name="🛡️ 所持ロール", value=roles_str, inline=False)
-    return embed
-
-
-# --- クローズボタン付きビュー ---
-class TicketControlView(discord.ui.View):
-    def __init__(self):
+# ==========================================
+# 準備確認ボタン View (チケット作成後に送信)
+# ==========================================
+class ReadyCheckView(discord.ui.View):
+    def __init__(self, applicant: discord.Member):
         super().__init__(timeout=None)
+        self.applicant = applicant
 
-    @discord.ui.button(label="🔒 チケットを閉じる", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction.user):
-            await interaction.response.send_message("❌ チケットを閉じる権限がありません（上層部以上専用）。", ephemeral=True)
+    @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes")
+    async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 応募者本人以外が押した場合は弾く
+        if interaction.user.id != self.applicant.id:
+            await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
             return
 
-        await interaction.response.send_message("⚠️ このチケットを 5秒後 に削除します...")
-        import asyncio
-        await asyncio.sleep(5)
-        await interaction.channel.delete()
+        # ボタンを無効化してメッセージを更新
+        button.disabled = True
+        await interaction.response.edit_message(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
 
+        # 対話型回答セッションの開始
+        await start_quiz_session(interaction.channel, self.applicant, interaction.client)
 
-# --- 面接対話処理（質問スタート） ---
-async def start_interview(interaction: discord.Interaction, dept_name: str):
-    questions = CONFIG_DATA["departments"].get(dept_name, {}).get("questions", [])
-
-    if not questions:
-        await interaction.channel.send("⚠️ この部署にはまだ質問が設定されていません。管理者の対応をお待ちください。")
-        return
-
+# ==========================================
+# 1問ずつメッセージで出題する処理
+# ==========================================
+async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Member, bot: commands.Bot):
+    questions = quiz_config.get("questions", [])
     answers = []
 
-    def check(m):
-        return m.author == interaction.user and m.channel == interaction.channel
+    def check(m: discord.Message):
+        # 応募者本人が該当チャンネルで送信したメッセージのみを受け付ける
+        return m.author.id == applicant.id and m.channel.id == channel.id
 
-    for idx, q_text in enumerate(questions, start=1):
-        await interaction.channel.send(f"**{idx}: {q_text}**")
+    for q in questions:
+        # 問題の送信
+        embed = discord.Embed(
+            title=f"❓ 質問 {q['id']} / {len(questions)}",
+            description=q["question"],
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="メッセージを送信して回答してください。")
+        await channel.send(embed=embed)
+
         try:
-            msg = await interaction.client.wait_for("message", check=check, timeout=300.0)
-            answers.append((q_text, msg.content))
-        except Exception:
-            await interaction.channel.send("⏱️ 応答時間（5分）を超えました。面接を中断します。")
+            # ユーザーからのメッセージ応答を待つ (タイムアウト: 30分)
+            msg = await bot.wait_for("message", check=check, timeout=1800.0)
+            answers.append({
+                "question": q["question"],
+                "answer": msg.content
+            })
+            await channel.send("✅ 回答を受け付けました。")
+            await asyncio.sleep(1)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ 応答が一定時間なかったため、受け付けを一時中断しました。")
             return
 
-    summary_embed = discord.Embed(title=f"📋 【{dept_name}】応募回答一覧", color=discord.Color.green())
-    for idx, (q, a) in enumerate(answers, start=1):
-        summary_embed.add_field(name=f"問{idx}: {q}", value=a, inline=False)
+    # 全問回答完了時のサマリー表示
+    result_embed = discord.Embed(
+        title="🎉 応募の回答が完了しました！",
+        description="ご回答ありがとうございました。提出内容は以下の通りです。",
+        color=discord.Color.gold()
+    )
+    result_embed.set_author(name=f"{applicant.display_name} ({applicant.name})", icon_url=applicant.display_avatar.url)
 
-    await interaction.channel.send("✅ すべての質問が完了しました！回答内容は以下の通りです。", embed=summary_embed)
+    for idx, item in enumerate(answers, 1):
+        result_embed.add_field(
+            name=f"問{idx}. {item['question']}",
+            value=item["answer"],
+            inline=False
+        )
 
-    log_channel = interaction.guild.get_channel(LOG_CHANNEL_ID)
-    if log_channel:
-        log_text = f"USERNAME: {interaction.user.mention} (`{interaction.user.name}`)\n"
-        log_text += f"質問：\n"
-        log_text += f"回答：\n"
-        log_text += "━━━━━━━━━━━━━━━━━━━\n"
-        for q, a in answers:
-            log_text += f"質問：{q}\n回答：{a}\n---\n"
-        await log_channel.send(log_text)
+    await channel.send(embed=result_embed)
 
-
-# --- 一般ユーザー用：部署選択ドロップダウン ---
-class DepartmentSelect(discord.ui.Select):
-    def __init__(self, open_departments):
-        options = [
-            discord.SelectOption(label=dept, description=f"{dept}への自己推薦")
-            for dept in open_departments
-        ]
-        super().__init__(placeholder="応募したい部署を選択してください...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        dept_name = self.values[0]
-        category = interaction.guild.get_channel(DEFAULT_CATEGORY_ID)
-
-        if not category or not isinstance(category, discord.CategoryChannel):
-            await interaction.response.send_message(f"❌ 指定のカテゴリー(ID: {DEFAULT_CATEGORY_ID})が見つかりません。", ephemeral=True)
-            return
-
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-
-        # 「上層部」以上の階層を持つ全ロールにチケットの閲覧・送信権限を付与
-        base_role = interaction.guild.get_role(BASE_ADMIN_ROLE_ID)
-        if base_role:
-            for role in interaction.guild.roles:
-                if role.position >= base_role.position:
-                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-        channel_name = f"求職-{interaction.user.name}"
-        ticket_channel = await category.create_text_channel(name=channel_name, overwrites=overwrites)
-
-        await interaction.response.send_message(f"✅ 面接チケットを作成しました: {ticket_channel.mention}", ephemeral=True)
-
-        user_embed = create_user_info_embed(interaction.user)
-        await ticket_channel.send(embed=user_embed, view=TicketControlView())
-        await start_interview(interaction, dept_name)
-
-
-class DepartmentSelectView(discord.ui.View):
-    def __init__(self, open_departments):
-        super().__init__(timeout=None)
-        self.add_item(DepartmentSelect(open_departments))
-
-
-# --- 一般ユーザー用パネルのボタン ---
-class UserPanelButton(discord.ui.View):
+# ==========================================
+# 応募ボタン View (一般ユーザー用パネル)
+# ==========================================
+class QuizUserPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="応募する", style=discord.ButtonStyle.primary, custom_id="recommend_apply_btn")
-    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
-        departments = CONFIG_DATA.get("departments", {})
-        open_departments = [dept for dept, info in departments.items() if info.get("is_open", True)]
-
-        if not open_departments:
-            await interaction.response.send_message("🚫 現在、募集中の部署はありません。", ephemeral=True)
+    @discord.ui.button(label="📝 応募する", style=discord.ButtonStyle.primary, custom_id="quiz_apply_button")
+    async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not quiz_config.get("is_open", True):
+            await interaction.response.send_message("🚫 現在、募集は締め切られています。", ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            "希望する部署を選択してください：",
-            view=DepartmentSelectView(open_departments),
-            ephemeral=True
+        guild = interaction.guild
+        user = interaction.user
+        role_name = quiz_config.get("role_name", "自己推薦")
+
+        # チャンネル名: (応募役職)-(ユーザー名)
+        channel_name = f"{role_name}-{user.name}".lower()
+
+        # チケットチャンネルの権限
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+
+        # 非公開チャンネルを作成
+        category = interaction.channel.category
+        ticket_channel = await guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            overwrites=overwrites,
+            topic=f"{user.display_name} さんの応募用チャンネルです。"
         )
 
-
-# --- モーダル（文字入力フォーム） ---
-class AddDepartmentModal(discord.ui.Modal, title="部署の追加"):
-    dept_name = discord.ui.TextInput(label="部署名", placeholder="例: 開発部、広報部など")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if self.dept_name.value in CONFIG_DATA["departments"]:
-            await interaction.response.send_message("⚠️ その部署は既に登録されています。", ephemeral=True)
-            return
-
-        CONFIG_DATA["departments"][self.dept_name.value] = {"is_open": True, "questions": []}
-        await save_config_to_discord(interaction.client)
-        await interaction.response.send_message(f"✅ 部署『{self.dept_name.value}』を追加し、保存しました！", ephemeral=True)
-
-
-class AddQuestionModal(discord.ui.Modal, title="質問の一括追加"):
-    def __init__(self, dept_name):
-        super().__init__()
-        self.dept_name = dept_name
-        self.q_text = discord.ui.TextInput(
-            label=f"【{dept_name}】への質問内容 (改行で複数追加)",
-            style=discord.TextStyle.paragraph,
-            placeholder="改行して入力すると複数の質問を一括登録できます\n例:\n志望動機を教えてください\n過去の実績はありますか？",
-            max_length=2000
+        # 作成されたチャンネルに「準備はできましたか？」メッセージを送信
+        ready_embed = discord.Embed(
+            title=f"📋 {role_name} 応募確認",
+            description=f"{user.mention} さん、専用チャンネルを作成しました。\n**準備はできましたか？**\n「はい」のボタンを押すと質疑応答を開始します。",
+            color=discord.Color.green()
         )
-        self.add_item(self.q_text)
+        
+        view = ReadyCheckView(applicant=user)
+        await ticket_channel.send(content=user.mention, embed=ready_embed, view=view)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        if self.dept_name in CONFIG_DATA["departments"]:
-            new_questions = [q.strip() for q in self.q_text.value.split("\n") if q.strip()]
+        # 案内メッセージ
+        await interaction.response.send_message(f"✅ 専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
 
-            if not new_questions:
-                await interaction.response.send_message("⚠️ 質問テキストが入力されていません。", ephemeral=True)
-                return
-
-            CONFIG_DATA["departments"][self.dept_name]["questions"].extend(new_questions)
-            await save_config_to_discord(interaction.client)
-
-            count = len(new_questions)
-            await interaction.response.send_message(f"✅ 『{self.dept_name}』に {count} 件の質問を追加・保存しました！", ephemeral=True)
-
-
-# --- 管理者パネルUI ---
+# ==========================================
+# 管理パネル View (管理者用)
+# ==========================================
 class AdminPanelEditView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="➕ 部署追加", style=discord.ButtonStyle.success)
-    async def add_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AddDepartmentModal())
-
-    @discord.ui.button(label="🗑️ 部署削除", style=discord.ButtonStyle.danger)
-    async def delete_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        depts = CONFIG_DATA.get("departments", {})
-        if not depts:
-            await interaction.response.send_message("❌ 削除できる部署がありません。", ephemeral=True)
-            return
-
-        select = discord.ui.Select(placeholder="削除する部署を選択してください...")
-        for d in depts.keys():
-            select.add_option(label=d)
-
-        async def select_callback(inter: discord.Interaction):
-            target = select.values[0]
-            del CONFIG_DATA["departments"][target]
-            await save_config_to_discord(inter.client)
-            await inter.response.send_message(f"🗑️ 部署『{target}』を削除しました！", ephemeral=True)
-
-        select.callback = select_callback
-        view = discord.ui.View()
-        view.add_item(select)
-        await interaction.response.send_message("削除したい部署を選んでください：", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ 質問追加", style=discord.ButtonStyle.primary)
-    async def add_q(self, interaction: discord.Interaction, button: discord.ui.Button):
-        depts = CONFIG_DATA.get("departments", {})
-        if not depts:
-            await interaction.response.send_message("❌ まず部署を追加してください。", ephemeral=True)
-            return
-
-        select = discord.ui.Select(placeholder="質問を追加したい部署を選択...")
-        for d in depts.keys():
-            select.add_option(label=d)
-
-        async def select_callback(inter: discord.Interaction):
-            await inter.response.send_modal(AddQuestionModal(select.values[0]))
-
-        select.callback = select_callback
-        view = discord.ui.View()
-        view.add_item(select)
-        await interaction.response.send_message("部署を選んでください：", view=view, ephemeral=True)
-
-    @discord.ui.button(label="🔄 募集ON/OFF切替", style=discord.ButtonStyle.secondary)
-# または黄色っぽいオレンジ色にしたい場合は `.secondary` や `.primary` に変更します
-    async def toggle_dept_open(self, interaction: discord.Interaction, button: discord.ui.Button):
-        depts = CONFIG_DATA.get("departments", {})
-        if not depts:
-            await interaction.response.send_message("❌ 部署が登録されていません。", ephemeral=True)
-            return
-
-        select = discord.ui.Select(placeholder="募集状態を切り替える部署を選択...")
-        for d, info in depts.items():
-            status_str = "🟢募集ON" if info.get("is_open", True) else "🔴募集OFF"
-            select.add_option(label=d, description=f"現在: {status_str}")
-
-        async def select_callback(inter: discord.Interaction):
-            target_dept = select.values[0]
-            current_status = CONFIG_DATA["departments"][target_dept].get("is_open", True)
-            CONFIG_DATA["departments"][target_dept]["is_open"] = not current_status
-            await save_config_to_discord(inter.client)
-
-            new_status = "🟢 募集受付中" if CONFIG_DATA["departments"][target_dept]["is_open"] else "🔴 募集停止中"
-            await inter.response.send_message(f"✅ 『{target_dept}』の募集状態を **{new_status}** に変更・保存しました！", ephemeral=True)
-
-        select.callback = select_callback
-        view = discord.ui.View()
-        view.add_item(select)
-        await interaction.response.send_message("状態を変更する部署を選んでください：", view=view, ephemeral=True)
-
-    @discord.ui.button(label="📢 パネル送信", style=discord.ButtonStyle.secondary)
-    async def send_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="📌 応募パネルをここに設置", style=discord.ButtonStyle.success, custom_id="quiz_setup_panel")
+    async def setup_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        status_text = "🟢 **現在募集受付中**" if quiz_config.get("is_open", True) else "🔴 **現在募集停止中**"
+        
         embed = discord.Embed(
-            title="📄 自己推薦・社員募集パネル",
-            description="以下の「応募する」ボタンを押して、希望する部署の面接チケットを開設してください。",
-            color=discord.Color.gold()
+            title="✨ 自己推薦・応募受付",
+            description=f"以下のボタンを押すと専用の応募用チャンネルが作成されます。\n\n**ステータス:** {status_text}",
+            color=discord.Color.green() if quiz_config.get("is_open", True) else discord.Color.red()
         )
-        await interaction.channel.send(embed=embed, view=UserPanelButton())
+        
+        view = QuizUserPanelView()
+        msg = await interaction.channel.send(embed=embed, view=view)
+        
+        quiz_config["panel_channel_id"] = interaction.channel.id
+        quiz_config["panel_message_id"] = msg.id
+        await save_config_to_discord(interaction.client)
+        
         await interaction.response.send_message("✅ 応募パネルを設置しました！", ephemeral=True)
 
+    @discord.ui.button(label="🔄 募集ON/OFF切替", style=discord.ButtonStyle.secondary, custom_id="quiz_toggle_status")
+    async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
+        current = quiz_config.get("is_open", True)
+        quiz_config["is_open"] = not current
+        await save_config_to_discord(interaction.client)
 
-# --- main.py から登録するための関数 ---
-def setup_quiz_commands(bot):
+        status_str = "🟢 **募集を開始**" if quiz_config["is_open"] else "🔴 **募集を停止**"
+        await interaction.response.send_message(f"ステータスを変更しました: {status_str}", ephemeral=True)
+
+# ==========================================
+# コマンドの登録関数
+# ==========================================
+def setup_quiz_commands(bot: commands.Bot):
+
     @bot.command(name="recommendadminpanel")
-    async def recommend_admin_panel(ctx):
-        if not is_admin(ctx.author):
-            await ctx.send("❌ このコマンドを使用する権限がありません（「上層部」以上のロールが必要です）。")
-            return
-
-        depts_summary = []
-        for d, info in CONFIG_DATA.get("departments", {}).items():
-            status = "🟢" if info.get("is_open", True) else "🔴"
-            q_count = len(info.get("questions", []))
-            depts_summary.append(f"・**{d}**: {status} (質問{q_count}個)")
-
-        summary_text = "\n".join(depts_summary) if depts_summary else "（部署未登録）"
-
+    @commands.has_permissions(administrator=True)
+    async def recommend_admin_panel(ctx: commands.Context):
+        """管理パネルを設置するコマンド"""
         embed = discord.Embed(
-            title="⚙️ 自己推薦 システム管理者パネル",
-            description=f"**【現在の部署一覧】**\n{summary_text}\n\n下のボタンから部署の追加・削除・質問設定・ON/OFF切替が行えます。",
-            color=discord.Color.dark_grey()
+            title="⚙️ 自己推薦 システム管理パネル",
+            description="下のボタンから応募パネルの設置や募集の切り替えを行えます。",
+            color=discord.Color.gold()
         )
-        await ctx.send(embed=embed, view=AdminPanelEditView())
+        view = AdminPanelEditView()
+        msg = await ctx.send(embed=embed, view=view)
+        quiz_config["admin_channel_id"] = ctx.channel.id
+        quiz_config["admin_message_id"] = msg.id
+        await save_config_to_discord(bot)
 
     @bot.command(name="recommendpanel")
-    async def recommend_panel(ctx):
+    @commands.has_permissions(administrator=True)
+    async def recommend_panel(ctx: commands.Context):
+        """応募パネルを直接設置するコマンド"""
+        status_text = "🟢 **現在募集受付中**" if quiz_config.get("is_open", True) else "🔴 **現在募集停止中**"
         embed = discord.Embed(
-            title="📄 自己推薦・社員募集パネル",
-            description="下の「応募する」ボタンを押して希望する部署を選択し、質問に回答してください。",
-            color=discord.Color.blue()
+            title="✨ 自己推薦・応募受付",
+            description=f"以下のボタンを押すと専用の応募用チャンネルが作成されます。\n\n**ステータス:** {status_text}",
+            color=discord.Color.green() if quiz_config.get("is_open", True) else discord.Color.red()
         )
-        await ctx.send(embed=embed, view=UserPanelButton())
+        view = QuizUserPanelView()
+        msg = await ctx.send(embed=embed, view=view)
+        quiz_config["panel_channel_id"] = ctx.channel.id
+        quiz_config["panel_message_id"] = msg.id
+        await save_config_to_discord(bot)
