@@ -6,10 +6,12 @@ import asyncio
 import io
 
 # ==========================================
-# 永続化用チャンネル・メッセージ管理
+# 永続化用チャンネル・メッセージ・ロール管理
 # ==========================================
 CONFIG_CHANNEL_ID = 1526289865719943329  # 設定保存用チャンネルID
 LOG_CHANNEL_ID = 1510042822533840936     # ログ送信先チャンネルID
+ADMIN_ROLE_ID = 1510405214811852900      # 基準となる管理者ロールID
+
 config_message_id = None
 
 # 初期設定データ構造
@@ -27,8 +29,25 @@ quiz_config = {
     }
 }
 
+def is_admin_role_or_higher(user: discord.Member) -> bool:
+    """指定ロール(ADMIN_ROLE_ID)か、それより上位の位置(position)にあるロールを持っているか判定"""
+    if not isinstance(user, discord.Member):
+        return False
+    
+    # サーバーオーナーは無条件で許可
+    if user.guild.owner_id == user.id:
+        return True
+
+    target_role = user.guild.get_role(ADMIN_ROLE_ID)
+    if not target_role:
+        # ロールが見つからない場合は安全のためDiscordの管理者権限で判定
+        return user.guild_permissions.administrator
+
+    # ユーザーが持つ最高位ロールの位置が、指定ロールの位置以上かチェック
+    return user.top_role.position >= target_role.position
+
 async def get_config_channel(bot: commands.Bot):
-    """設定保存用チャンネルを取得する（キャッシュにない場合はAPIから直接取得）"""
+    """設定保存用チャンネルを取得する"""
     channel = bot.get_channel(CONFIG_CHANNEL_ID)
     if channel is None:
         try:
@@ -78,15 +97,12 @@ async def load_config_from_discord(bot: commands.Bot):
         return
 
     try:
-        # 最新のメッセージから順に探す
         async for msg in channel.history(limit=20):
             if msg.author.id == bot.user.id and msg.content.startswith("```json"):
                 json_str = msg.content.strip("`").replace("json\n", "").strip()
                 loaded_data = json.loads(json_str)
                 
-                # 有効なデータが入っている場合のみ復旧する
                 if isinstance(loaded_data, dict) and "departments" in loaded_data:
-                    # 辞書の中身を完全に上書き
                     quiz_config.clear()
                     quiz_config.update(loaded_data)
                     config_message_id = msg.id
@@ -122,7 +138,6 @@ async def execute_channel_close(interaction: discord.Interaction):
     bot = interaction.client
     channel = interaction.channel
 
-    # ログ送信先チャンネルを取得
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if log_channel is None:
         try:
@@ -130,7 +145,6 @@ async def execute_channel_close(interaction: discord.Interaction):
         except Exception as e:
             print(f"❌ ログ送信チャンネルの取得に失敗しました: {e}")
 
-    # 会話履歴の取得とテキストファイル化
     messages = []
     async for msg in channel.history(limit=500, oldest_first=True):
         timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -141,7 +155,6 @@ async def execute_channel_close(interaction: discord.Interaction):
     file_data = io.BytesIO(history_text.encode("utf-8"))
     discord_file = discord.File(file_data, filename=f"history-{channel.name}.txt")
 
-    # ログ用Embed作成
     log_embed = discord.Embed(
         title="🔒 応募チャンネルクローズドログ",
         description=f"**対象チャンネル:** `{channel.name}`\n**実行者:** {interaction.user.mention} (`{interaction.user.id}`)",
@@ -155,7 +168,6 @@ async def execute_channel_close(interaction: discord.Interaction):
     await channel.delete(reason="応募チャンネル閉鎖のため")
 
 class CloseConfirmView(discord.ui.View):
-    """!closereq 実行時に表示されるクローズ確認ビュー"""
     def __init__(self):
         super().__init__(timeout=60)
 
@@ -184,7 +196,6 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
         await channel.send(embed=embed)
 
         try:
-            # 30分（1800秒）待機
             msg = await bot.wait_for("message", check=check, timeout=1800.0)
             answers.append({
                 "question": q["question"],
@@ -216,10 +227,8 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
         )
     result_embed.set_footer(text=f"User ID: {applicant.id}")
 
-    # ① 現在の応募用チャンネルに送信
     await channel.send(embed=result_embed)
 
-    # ② 指定のログチャンネルにも送信
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     if log_channel is None:
         try:
@@ -239,12 +248,17 @@ class ReadyCheckView(discord.ui.View):
 
     @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes_persistent")
     async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
         if self.applicant and interaction.user.id != self.applicant.id:
-            await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
+            await interaction.followup.send("⚠️ 応募者本人しか操作できません。", ephemeral=True)
             return
 
         button.disabled = True
-        await interaction.response.edit_message(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
+        try:
+            await interaction.edit_original_response(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
+        except Exception as e:
+            print(f"⚠️ メッセージ編集エラー: {e}")
         
         applicant = self.applicant or interaction.user
         await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, self.questions)
@@ -278,13 +292,24 @@ class QuizUserPanelSelect(discord.ui.Select):
         user = interaction.user
         channel_name = f"{dept_name}-{user.name}".lower()
 
+        # 基本権限（応募者本人とBOTのみ許可、全体は非表示）
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
 
+        # 基準となる管理者ロールを取得
+        base_admin_role = guild.get_role(ADMIN_ROLE_ID)
+        
+        # 基準ロール以上のすべてのロールに閲覧・送信権限を付与
+        if base_admin_role:
+            for role in guild.roles:
+                if role.position >= base_admin_role.position:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
         category = interaction.channel.category
+        
         ticket_channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
@@ -437,10 +462,16 @@ class AdminPanelEditView(discord.ui.View):
 
     @discord.ui.button(label="➕ 部署追加", style=discord.ButtonStyle.primary, custom_id="admin_add_dept_btn")
     async def add_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin_role_or_higher(interaction.user):
+            await interaction.response.send_message("⚠️ この操作を実行する権限がありません。", ephemeral=True)
+            return
         await interaction.response.send_modal(AddDeptModal(interaction.message, interaction.client))
 
     @discord.ui.button(label="🗑️ 部署削除", style=discord.ButtonStyle.danger, custom_id="admin_del_dept_btn")
     async def del_dept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin_role_or_higher(interaction.user):
+            await interaction.response.send_message("⚠️ この操作を実行する権限がありません。", ephemeral=True)
+            return
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 削除できる部署がありません。", ephemeral=True)
             return
@@ -448,6 +479,9 @@ class AdminPanelEditView(discord.ui.View):
 
     @discord.ui.button(label="❓ 質問追加", style=discord.ButtonStyle.secondary, custom_id="admin_add_question_btn")
     async def add_question(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin_role_or_higher(interaction.user):
+            await interaction.response.send_message("⚠️ この操作を実行する権限がありません。", ephemeral=True)
+            return
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 先に「部署追加」を行ってください。", ephemeral=True)
             return
@@ -455,6 +489,9 @@ class AdminPanelEditView(discord.ui.View):
 
     @discord.ui.button(label="🔄 募集ON/OFF機能", style=discord.ButtonStyle.secondary, custom_id="admin_toggle_status_btn")
     async def toggle_status(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin_role_or_higher(interaction.user):
+            await interaction.response.send_message("⚠️ この操作を実行する権限がありません。", ephemeral=True)
+            return
         if not quiz_config.get("departments"):
             await interaction.response.send_message("⚠️ 設定する部署がありません。", ephemeral=True)
             return
@@ -462,6 +499,9 @@ class AdminPanelEditView(discord.ui.View):
 
     @discord.ui.button(label="📌 パネル送信", style=discord.ButtonStyle.success, custom_id="admin_send_panel_btn")
     async def send_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin_role_or_higher(interaction.user):
+            await interaction.response.send_message("⚠️ この操作を実行する権限がありません。", ephemeral=True)
+            return
         embed = discord.Embed(
             title="✨ 自己推薦・応募受付",
             description="下のメニューから応募したい部署を選択してください。",
@@ -476,16 +516,21 @@ def setup_quiz_commands(bot: commands.Bot):
     bot.add_view(ReadyCheckView())
 
     @bot.command(name="recommendadminpanel")
-    @commands.has_permissions(administrator=True)
     async def recommend_admin_panel(ctx: commands.Context):
+        # 指定ロール、またはそれより高順位のロールを持つユーザーのみ許可
+        if not is_admin_role_or_higher(ctx.author):
+            await ctx.send("❌ このコマンドを実行する権限がありません。")
+            return
         embed = generate_admin_embed()
         view = AdminPanelEditView(bot)
         await ctx.send(embed=embed, view=view)
 
     @bot.command(name="testsave")
-    @commands.has_permissions(administrator=True)
     async def test_save_cmd(ctx: commands.Context):
         """データ保存のテストを行う管理者用コマンド"""
+        if not is_admin_role_or_higher(ctx.author):
+            await ctx.send("❌ このコマンドを実行する権限がありません。")
+            return
         await ctx.send("💾 テスト保存を実行します...")
         await save_config_to_discord(ctx.bot)
         await ctx.send("✅ テスト保存処理が完了しました。")
