@@ -117,6 +117,57 @@ def generate_admin_embed():
     embed.description = dept_text
     return embed
 
+async def execute_channel_close(interaction: discord.Interaction):
+    """チャンネル削除処理およびログ保存の共通関数"""
+    bot = interaction.client
+    channel = interaction.channel
+
+    # ログ送信先チャンネルを取得
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel is None:
+        try:
+            log_channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+        except Exception as e:
+            print(f"❌ ログ送信チャンネルの取得に失敗しました: {e}")
+
+    # 会話履歴の取得とテキストファイル化
+    messages = []
+    async for msg in channel.history(limit=500, oldest_first=True):
+        timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        content = msg.content if msg.content else "[埋め込み/メディアメッセージ]"
+        messages.append(f"[{timestamp}] {msg.author.display_name} ({msg.author.id}): {content}")
+
+    history_text = "\n".join(messages)
+    file_data = io.BytesIO(history_text.encode("utf-8"))
+    discord_file = discord.File(file_data, filename=f"history-{channel.name}.txt")
+
+    # ログ用Embed作成
+    log_embed = discord.Embed(
+        title="🔒 応募チャンネルクローズドログ",
+        description=f"**対象チャンネル:** `{channel.name}`\n**実行者:** {interaction.user.mention} (`{interaction.user.id}`)",
+        color=discord.Color.red()
+    )
+
+    if log_channel:
+        await log_channel.send(embed=log_embed, file=discord_file)
+
+    await asyncio.sleep(2)
+    await channel.delete(reason="応募チャンネル閉鎖のため")
+
+class CloseConfirmView(discord.ui.View):
+    """!closereq 実行時に表示されるクローズ確認ビュー"""
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="はい (クローズする)", style=discord.ButtonStyle.danger, custom_id="quiz_close_confirm_yes")
+    async def confirm_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔒 チャンネルをクローズして会話履歴をログチャンネルへ送信しています...", ephemeral=True)
+        await execute_channel_close(interaction)
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary, custom_id="quiz_close_confirm_no")
+    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="❌ クローズ処理をキャンセルしました。", embed=None, view=None)
+
 async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Member, bot: commands.Bot, dept_name: str, questions: list):
     answers = []
 
@@ -192,46 +243,6 @@ class ReadyCheckView(discord.ui.View):
         # 動的に呼び出し元情報を取得して開始
         applicant = self.applicant or interaction.user
         await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, self.questions)
-
-    @discord.ui.button(label="🔒 閉じる", style=discord.ButtonStyle.danger, custom_id="quiz_ready_close_persistent")
-    async def ready_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🔒 チャンネルをクローズして会話履歴をログチャンネルへ送信しています...", ephemeral=True)
-
-        bot = interaction.client
-        channel = interaction.channel
-
-        # ログ送信先チャンネルを取得
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel is None:
-            try:
-                log_channel = await bot.fetch_channel(LOG_CHANNEL_ID)
-            except Exception as e:
-                print(f"❌ ログ送信チャンネルの取得に失敗しました: {e}")
-
-        # 会話履歴の取得とテキストファイル化
-        messages = []
-        async for msg in channel.history(limit=500, oldest_first=True):
-            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            content = msg.content if msg.content else "[埋め込み/メディアメッセージ]"
-            messages.append(f"[{timestamp}] {msg.author.display_name} ({msg.author.id}): {content}")
-
-        history_text = "\n".join(messages)
-        file_data = io.BytesIO(history_text.encode("utf-8"))
-        discord_file = discord.File(file_data, filename=f"history-{channel.name}.txt")
-
-        # ログ用Embed作成
-        applicant = self.applicant or interaction.user
-        log_embed = discord.Embed(
-            title="🔒 応募チャンネルクローズドログ",
-            description=f"**対象チャンネル:** `{channel.name}`\n**対象ユーザー:** {applicant.mention} (`{applicant.id}`)\n**実行者:** {interaction.user.mention}",
-            color=discord.Color.red()
-        )
-
-        if log_channel:
-            await log_channel.send(embed=log_embed, file=discord_file)
-
-        await asyncio.sleep(2)
-        await channel.delete(reason="応募チャンネル閉鎖のため")
 
 class QuizUserPanelSelect(discord.ui.Select):
     def __init__(self):
@@ -478,3 +489,13 @@ def setup_quiz_commands(bot: commands.Bot):
         await ctx.send("💾 テスト保存を実行します...")
         await save_config_to_discord(ctx.bot)
         await ctx.send("✅ テスト保存処理が完了しました。")
+
+    @bot.command(name="closereq")
+    async def close_req_cmd(ctx: commands.Context):
+        """!closereq コマンドでクローズ確認メッセージを表示"""
+        embed = discord.Embed(
+            title="🔒 チャンネルの削除確認",
+            description="本当にこのチャンネルをクローズ（削除）しますか？\n会話履歴のテキストファイルがログチャンネルに送られます。",
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed, view=CloseConfirmView())
