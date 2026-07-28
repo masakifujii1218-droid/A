@@ -231,6 +231,7 @@ class QuizUserPanelSelect(discord.ui.Select):
 
         await interaction.followup.send(f"✅ {dept_name}の専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
 
+# 【修正箇所】インスタンス化時に動的に QuizUserPanelSelect を追加するように修正
 class QuizUserPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
