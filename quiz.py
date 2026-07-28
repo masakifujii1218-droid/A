@@ -76,16 +76,21 @@ async def load_config_from_discord(bot: commands.Bot):
         return
 
     try:
-        async for msg in channel.history(limit=10):
+        # 最新のメッセージから順に探す
+        async for msg in channel.history(limit=20):
             if msg.author.id == bot.user.id and msg.content.startswith("```json"):
                 json_str = msg.content.strip("`").replace("json\n", "").strip()
                 loaded_data = json.loads(json_str)
-                if "departments" in loaded_data:
+                
+                # 有効なデータが入っている場合のみ復旧する
+                if isinstance(loaded_data, dict) and "departments" in loaded_data:
+                    # 辞書の中身を完全に上書き
+                    quiz_config.clear()
                     quiz_config.update(loaded_data)
-                config_message_id = msg.id
-                print(f"✅ [Quiz] 設定データをDiscordから正常に復旧しました。(Message ID: {config_message_id})")
-                return
-        print("ℹ️ [Quiz] 保存されている設定データが見つかりませんでした。")
+                    config_message_id = msg.id
+                    print(f"✅ [Quiz] 設定データをDiscordから正常に復旧しました。(Message ID: {config_message_id})")
+                    return
+        print("ℹ️ [Quiz] 有効な保存データが見つかりませんでした。初期設定を使用します。")
     except Exception as e:
         print(f"❌ [Quiz] 設定復旧エラー: {e}")
 
@@ -102,8 +107,8 @@ def generate_admin_embed():
         dept_text += "現在登録されている部署はありません。\n"
     else:
         for dept, data in departments.items():
-            status = "🟢" if data["is_open"] else "🔴"
-            q_count = len(data["questions"])
+            status = "🟢" if data.get("is_open", True) else "🔴"
+            q_count = len(data.get("questions", []))
             dept_text += f"・{dept}: {status} (質問{q_count}個)\n"
             
     dept_text += "\n下のボタンから部署の追加・削除・質問設定・ON/OFF切替が行えます。"
@@ -154,27 +159,30 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
     await channel.send(embed=result_embed)
 
 class ReadyCheckView(discord.ui.View):
-    def __init__(self, applicant: discord.Member, dept_name: str, questions: list):
+    def __init__(self, applicant: discord.Member = None, dept_name: str = "", questions: list = None):
         super().__init__(timeout=None)
         self.applicant = applicant
         self.dept_name = dept_name
-        self.questions = questions
+        self.questions = questions or []
 
     @discord.ui.button(label="はい (開始する)", style=discord.ButtonStyle.success, custom_id="quiz_ready_yes_persistent")
     async def ready_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.applicant.id:
+        if self.applicant and interaction.user.id != self.applicant.id:
             await interaction.response.send_message("⚠️ 応募者本人しか操作できません。", ephemeral=True)
             return
 
         button.disabled = True
         await interaction.response.edit_message(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
-        await start_quiz_session(interaction.channel, self.applicant, interaction.client, self.dept_name, self.questions)
+        
+        # 動的に呼び出し元情報を取得して開始
+        applicant = self.applicant or interaction.user
+        await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, self.questions)
 
 class QuizUserPanelSelect(discord.ui.Select):
     def __init__(self):
         options = []
         for dept, data in quiz_config.get("departments", {}).items():
-            desc = "🟢 受付中" if data["is_open"] else "🔴 停止中"
+            desc = "🟢 受付中" if data.get("is_open", True) else "🔴 停止中"
             options.append(discord.SelectOption(label=dept, description=desc, value=dept))
             
         if not options:
@@ -190,8 +198,8 @@ class QuizUserPanelSelect(discord.ui.Select):
             await interaction.followup.send("現在応募できる部署がありません。", ephemeral=True)
             return
 
-        dept_data = quiz_config["departments"].get(dept_name)
-        if not dept_data or not dept_data["is_open"]:
+        dept_data = quiz_config.get("departments", {}).get(dept_name)
+        if not dept_data or not dept_data.get("is_open", True):
             await interaction.followup.send(f"🚫 「{dept_name}」は存在しないか、現在募集を締め切っています。", ephemeral=True)
             return
 
@@ -218,7 +226,7 @@ class QuizUserPanelSelect(discord.ui.Select):
             description=f"{user.mention} さん、専用チャンネルを作成しました。\n\n**準備はできましたか？**\n以下の「はい (開始する)」ボタンを押すと質問を開始します。",
             color=discord.Color.green()
         )
-        view = ReadyCheckView(applicant=user, dept_name=dept_name, questions=dept_data["questions"])
+        view = ReadyCheckView(applicant=user, dept_name=dept_name, questions=dept_data.get("questions", []))
         await ticket_channel.send(content=user.mention, embed=ready_embed, view=view)
 
         await interaction.followup.send(f"✅ {dept_name}の専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
@@ -239,9 +247,12 @@ class AddDeptModal(discord.ui.Modal, title="新しい部署の追加"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         name = self.dept_name.value
-        if name in quiz_config["departments"]:
+        if name in quiz_config.get("departments", {}):
             await interaction.followup.send("⚠️ その部署は既に存在します。", ephemeral=True)
             return
+            
+        if "departments" not in quiz_config:
+            quiz_config["departments"] = {}
             
         quiz_config["departments"][name] = {"is_open": True, "questions": []}
         await save_config_to_discord(self.bot_ref)
@@ -268,13 +279,13 @@ class AddQuestionsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        dept_data = quiz_config["departments"].get(self.dept_name)
+        dept_data = quiz_config.get("departments", {}).get(self.dept_name)
         if not dept_data:
             await interaction.followup.send("⚠️ 指定された部署が見つかりませんでした。", ephemeral=True)
             return
 
         lines = [line.strip() for line in self.questions_text.value.split("\n") if line.strip()]
-        current_len = len(dept_data["questions"])
+        current_len = len(dept_data.get("questions", []))
         added_count = 0
         for i, line in enumerate(lines):
             new_id = current_len + i + 1
@@ -296,7 +307,7 @@ class SelectDeptView(discord.ui.View):
         self.admin_msg = admin_msg
         self.bot_ref = bot_ref
         
-        options = [discord.SelectOption(label=d, value=d) for d in quiz_config["departments"].keys()]
+        options = [discord.SelectOption(label=d, value=d) for d in quiz_config.get("departments", {}).keys()]
         if not options:
             options.append(discord.SelectOption(label="部署がありません", value="none"))
             
@@ -312,7 +323,8 @@ class SelectDeptView(discord.ui.View):
         
         if self.action == "delete":
             await interaction.response.defer()
-            del quiz_config["departments"][dept]
+            if dept in quiz_config.get("departments", {}):
+                del quiz_config["departments"][dept]
             await save_config_to_discord(self.bot_ref)
             try:
                 await self.admin_msg.edit(embed=generate_admin_embed())
@@ -322,7 +334,8 @@ class SelectDeptView(discord.ui.View):
             
         elif self.action == "toggle":
             await interaction.response.defer()
-            quiz_config["departments"][dept]["is_open"] = not quiz_config["departments"][dept]["is_open"]
+            if dept in quiz_config.get("departments", {}):
+                quiz_config["departments"][dept]["is_open"] = not quiz_config["departments"][dept].get("is_open", True)
             await save_config_to_discord(self.bot_ref)
             try:
                 await self.admin_msg.edit(embed=generate_admin_embed())
@@ -381,7 +394,7 @@ class AdminPanelEditView(discord.ui.View):
 def setup_quiz_commands(bot: commands.Bot):
     bot.add_view(AdminPanelEditView(bot))
     bot.add_view(QuizUserPanelView())
-    bot.add_view(ReadyCheckView(None, "", []))
+    bot.add_view(ReadyCheckView())
 
     @bot.command(name="recommendadminpanel")
     @commands.has_permissions(administrator=True)
