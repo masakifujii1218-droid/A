@@ -25,12 +25,25 @@ quiz_config = {
     }
 }
 
+async def get_config_channel(bot: commands.Bot):
+    """設定保存用チャンネルを取得する（キャッシュにない場合はAPIから直接取得）"""
+    channel = bot.get_channel(CONFIG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(CONFIG_CHANNEL_ID)
+        except Exception as e:
+            print(f"❌ [Quiz] 設定保存用チャンネル (ID: {CONFIG_CHANNEL_ID}) の取得に失敗しました: {e}")
+            return None
+    return channel
+
 async def save_config_to_discord(bot: commands.Bot):
     """設定データを指定のチャンネルに自動保存・更新する"""
     global config_message_id
-    channel = bot.get_channel(CONFIG_CHANNEL_ID)
+    print("🚀 [Quiz] データ保存処理 (save_config_to_discord) を開始します...")
+    
+    channel = await get_config_channel(bot)
     if not channel:
-        print(f"❌ 設定保存用チャンネル (ID: {CONFIG_CHANNEL_ID}) が見つかりません。")
+        print(f"❌ [Quiz] 保存用チャンネルが見つからないため保存を中断しました。")
         return
 
     content = f"```json\n{json.dumps(quiz_config, ensure_ascii=False, indent=2)}\n```"
@@ -39,23 +52,27 @@ async def save_config_to_discord(bot: commands.Bot):
             try:
                 msg = await channel.fetch_message(config_message_id)
                 await msg.edit(content=content)
-                print("✅ 設定データをDiscord上で更新しました。")
+                print("✅ [Quiz] 設定データをDiscord上で更新しました。")
                 return
             except discord.NotFound:
-                pass
+                print("⚠️ [Quiz] 保存用メッセージが見つかりませんでした。新規作成します。")
+            except Exception as e:
+                print(f"⚠️ [Quiz] メッセージ編集失敗: {e}")
         
         msg = await channel.send(content=content)
         config_message_id = msg.id
-        print("✅ 設定データをDiscordに新規保存しました。")
+        print(f"✅ [Quiz] 設定データをDiscordに新規保存しました。(Message ID: {config_message_id})")
     except Exception as e:
-        print(f"❌ 設定保存エラー: {e}")
+        print(f"❌ [Quiz] 設定保存エラー: {e}")
 
 async def load_config_from_discord(bot: commands.Bot):
     """起動時にDiscordから設定データを読み込む"""
     global config_message_id, quiz_config
-    channel = bot.get_channel(CONFIG_CHANNEL_ID)
+    print("🔄 [Quiz] Discordから設定データの復旧を開始します...")
+    
+    channel = await get_config_channel(bot)
     if not channel:
-        print(f"⚠️ 設定保存用チャンネルが見つかりませんでした。初期値で動作します。")
+        print(f"⚠️ [Quiz] 設定保存用チャンネルが見つかりませんでした。初期値で動作します。")
         return
 
     try:
@@ -66,10 +83,11 @@ async def load_config_from_discord(bot: commands.Bot):
                 if "departments" in loaded_data:
                     quiz_config.update(loaded_data)
                 config_message_id = msg.id
-                print("✅ 設定データをDiscordから正常に復旧しました。")
-                break
+                print(f"✅ [Quiz] 設定データをDiscordから正常に復旧しました。(Message ID: {config_message_id})")
+                return
+        print("ℹ️ [Quiz] 保存されている設定データが見つかりませんでした。")
     except Exception as e:
-        print(f"❌ 設定復旧エラー: {e}")
+        print(f"❌ [Quiz] 設定復旧エラー: {e}")
 
 def generate_admin_embed():
     embed = discord.Embed(
@@ -361,10 +379,8 @@ class AdminPanelEditView(discord.ui.View):
         await interaction.response.send_message("✅ このチャンネルに応募用パネルを送信しました！", ephemeral=True)
 
 def setup_quiz_commands(bot: commands.Bot):
-    # 永続化ビューの登録（ボタンやセレクトメニューが時間切れや再起動で動かなくなるのを防ぐ）
     bot.add_view(AdminPanelEditView(bot))
     bot.add_view(QuizUserPanelView())
-    # 準備完了ボタンの永続化ビューも追加
     bot.add_view(ReadyCheckView(None, "", []))
 
     @bot.command(name="recommendadminpanel")
@@ -373,3 +389,11 @@ def setup_quiz_commands(bot: commands.Bot):
         embed = generate_admin_embed()
         view = AdminPanelEditView(bot)
         await ctx.send(embed=embed, view=view)
+
+    @bot.command(name="testsave")
+    @commands.has_permissions(administrator=True)
+    async def test_save_cmd(ctx: commands.Context):
+        """データ保存のテストを行う管理者用コマンド"""
+        await ctx.send("💾 テスト保存を実行します...")
+        await save_config_to_discord(ctx.bot)
+        await ctx.send("✅ テスト保存処理が完了しました。")
