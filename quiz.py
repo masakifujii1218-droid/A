@@ -3,11 +3,13 @@ from discord.ext import commands
 import json
 import os
 import asyncio
+import io
 
 # ==========================================
 # 永続化用チャンネル・メッセージ管理
 # ==========================================
 CONFIG_CHANNEL_ID = 1526289865719943329  # 設定保存用チャンネルID
+LOG_CHANNEL_ID = 1510042822533840936     # ログ送信先チャンネルID
 config_message_id = None
 
 # 初期設定データ構造
@@ -156,7 +158,20 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
             inline=False
         )
     result_embed.set_footer(text=f"User ID: {applicant.id}")
+
+    # ① 現在の応募用チャンネルに送信
     await channel.send(embed=result_embed)
+
+    # ② 指定のログチャンネル(ID: 1510042822533840936)にも送信
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel is None:
+        try:
+            log_channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+        except Exception as e:
+            print(f"❌ ログチャンネルの取得に失敗しました: {e}")
+
+    if log_channel:
+        await log_channel.send(embed=result_embed)
 
 class ReadyCheckView(discord.ui.View):
     def __init__(self, applicant: discord.Member = None, dept_name: str = "", questions: list = None):
@@ -177,6 +192,46 @@ class ReadyCheckView(discord.ui.View):
         # 動的に呼び出し元情報を取得して開始
         applicant = self.applicant or interaction.user
         await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, self.questions)
+
+    @discord.ui.button(label="🔒 閉じる", style=discord.ButtonStyle.danger, custom_id="quiz_ready_close_persistent")
+    async def ready_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔒 チャンネルをクローズして会話履歴をログチャンネルへ送信しています...", ephemeral=True)
+
+        bot = interaction.client
+        channel = interaction.channel
+
+        # ログ送信先チャンネルを取得
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel is None:
+            try:
+                log_channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+            except Exception as e:
+                print(f"❌ ログ送信チャンネルの取得に失敗しました: {e}")
+
+        # 会話履歴の取得とテキストファイル化
+        messages = []
+        async for msg in channel.history(limit=500, oldest_first=True):
+            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            content = msg.content if msg.content else "[埋め込み/メディアメッセージ]"
+            messages.append(f"[{timestamp}] {msg.author.display_name} ({msg.author.id}): {content}")
+
+        history_text = "\n".join(messages)
+        file_data = io.BytesIO(history_text.encode("utf-8"))
+        discord_file = discord.File(file_data, filename=f"history-{channel.name}.txt")
+
+        # ログ用Embed作成
+        applicant = self.applicant or interaction.user
+        log_embed = discord.Embed(
+            title="🔒 応募チャンネルクローズドログ",
+            description=f"**対象チャンネル:** `{channel.name}`\n**対象ユーザー:** {applicant.mention} (`{applicant.id}`)\n**実行者:** {interaction.user.mention}",
+            color=discord.Color.red()
+        )
+
+        if log_channel:
+            await log_channel.send(embed=log_embed, file=discord_file)
+
+        await asyncio.sleep(2)
+        await channel.delete(reason="応募チャンネル閉鎖のため")
 
 class QuizUserPanelSelect(discord.ui.Select):
     def __init__(self):
@@ -221,17 +276,29 @@ class QuizUserPanelSelect(discord.ui.Select):
             topic=f"{user.display_name} さんの【{dept_name}】応募用チャンネルです。"
         )
 
+        # 所持ロール一覧の取得（@everyoneを除外）
+        roles = [role.mention for role in user.roles if role.name != "@everyone"]
+        roles_str = ", ".join(roles) if roles else "なし"
+
+        # サーバー参加日
+        joined_at_str = user.joined_at.strftime("%Y/%m/%d %H:%M:%S") if user.joined_at else "不明"
+
         ready_embed = discord.Embed(
             title=f"📋 {dept_name} 応募手続き",
             description=f"{user.mention} さん、専用チャンネルを作成しました。\n\n**準備はできましたか？**\n以下の「はい (開始する)」ボタンを押すと質問を開始します。",
             color=discord.Color.green()
         )
+        
+        # 追加情報のフィールド差し込み
+        ready_embed.add_field(name="🆔 Discord ID", value=f"`{user.id}`", inline=False)
+        ready_embed.add_field(name="📅 サーバー参加日", value=joined_at_str, inline=False)
+        ready_embed.add_field(name="🎭 所持ロール一覧", value=roles_str, inline=False)
+
         view = ReadyCheckView(applicant=user, dept_name=dept_name, questions=dept_data.get("questions", []))
         await ticket_channel.send(content=user.mention, embed=ready_embed, view=view)
 
         await interaction.followup.send(f"✅ {dept_name}の専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
 
-# 【修正箇所】インスタンス化時に動的に QuizUserPanelSelect を追加するように修正
 class QuizUserPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
