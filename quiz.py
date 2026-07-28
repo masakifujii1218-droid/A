@@ -183,17 +183,13 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
         embed.set_footer(text="このチャンネルにメッセージを送信して回答してください。")
         await channel.send(embed=embed)
 
-        try:
-            msg = await bot.wait_for("message", check=check, timeout=1800.0)
-            answers.append({
-                "question": q["question"],
-                "answer": msg.content
-            })
-            await channel.send("✅ 回答を受け付けました。")
-            await asyncio.sleep(1)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ 応答が一定時間なかったため、受付を一時中断しました。")
-            return
+        msg = await bot.wait_for("message", check=check, timeout=None)
+        answers.append({
+            "question": q["question"],
+            "answer": msg.content
+        })
+        await channel.send("✅ 回答を受け付けました。")
+        await asyncio.sleep(1)
 
     result_embed = discord.Embed(
         title="📄 応募回答が提出されました",
