@@ -395,9 +395,6 @@ def setup_slash_commands(bot: commands.Bot):
     # 最初はローカルを読み込む
     load_points()
     
-    # 💡 非同期でDiscordチャンネルからデータを完全に同期（再起動対策）
-    asyncio.create_task(sync_points_from_discord(bot))
-    
     # メッセージイベントを設定
     setup_modmail_events(bot)
 
