@@ -5,6 +5,7 @@ import random
 import threading
 import time
 import asyncio
+import sys
 
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
@@ -327,14 +328,12 @@ class QuizView(discord.ui.View):
         self.quiz_data = quiz_data
         self.user_id = user_id
 
-        # 4つの選択肢に対応するボタンを動的に配置
         for choice in self.quiz_data["choices"]:
             button = discord.ui.Button(label=choice, style=discord.ButtonStyle.primary, custom_id=choice)
             button.callback = self.on_button_click
             self.add_item(button)
 
     async def on_button_click(self, interaction: discord.Interaction):
-        # 回答者本人以外の入力を無視
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("これはあなたのクイズではありません！", ephemeral=True)
             return
@@ -342,16 +341,13 @@ class QuizView(discord.ui.View):
         selected_answer = interaction.data["custom_id"]
         correct_answer = self.quiz_data["answer"]
 
-        # 全てのボタンを無効化
         for item in self.children:
             item.disabled = True
 
         if selected_answer == correct_answer:
-            # 【クールダウンリセット連携】
             usage_data = load_usage_data()
             user_id_str = str(interaction.user.id)
             if user_id_str in usage_data:
-                # create コマンドの履歴（クールダウン）を完全にリセット
                 if "create" in usage_data[user_id_str]:
                     usage_data[user_id_str]["create"] = []
                 save_usage_data(usage_data)
@@ -373,6 +369,195 @@ class QuizView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
+
+# ==========================================
+# 🎮 ミニゲーム1: じゃんけん (/janken)
+# ==========================================
+class JankenView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=30.0)
+        self.user_id = user_id
+
+    @discord.ui.button(label="✊ グー", style=discord.ButtonStyle.primary, custom_id="rock")
+    async def rock_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "✊ グー", "rock")
+
+    @discord.ui.button(label="✌️ チョキ", style=discord.ButtonStyle.primary, custom_id="scissors")
+    async def scissors_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "✌️ チョキ", "scissors")
+
+    @discord.ui.button(label="🖐️ パー", style=discord.ButtonStyle.primary, custom_id="paper")
+    async def paper_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "🖐️ パー", "paper")
+
+    async def play(self, interaction: discord.Interaction, user_choice_str, user_choice):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("これはあなたのゲームではありません！", ephemeral=True)
+            return
+
+        for item in self.children:
+            item.disabled = True
+
+        choices = {"rock": "✊ グー", "scissors": "✌️ チョキ", "paper": "🖐️ パー"}
+        bot_choice_key = random.choice(list(choices.keys()))
+        bot_choice_str = choices[bot_choice_key]
+
+        if user_choice == bot_choice_key:
+            result_title = "⚖️ あいこ！"
+            color = discord.Color.gold()
+        elif (
+            (user_choice == "rock" and bot_choice_key == "scissors") or
+            (user_choice == "scissors" and bot_choice_key == "paper") or
+            (user_choice == "paper" and bot_choice_key == "rock")
+        ):
+            result_title = "✨ あなたの勝ち！"
+            color = discord.Color.green()
+        else:
+            result_title = "💧 あなたの負け..."
+            color = discord.Color.red()
+
+        embed = discord.Embed(
+            title=f"✊ じゃんけん勝負: {result_title}",
+            description=f"あなた: {user_choice_str}\nボット: {bot_choice_str}",
+            color=color
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+@bot.tree.command(name="janken", description="ボットとシンプルにじゃんけん勝負！")
+async def janken_command(interaction: discord.Interaction):
+    view = JankenView(user_id=interaction.user.id)
+    embed = discord.Embed(
+        title="✊ じゃんけんゲーム",
+        description="下のボタンから出す手を選んでね！",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, view=view)
+
+# ==========================================
+# 🎮 ミニゲーム2: おみくじ (/omikuji)
+# ==========================================
+@bot.tree.command(name="omikuji", description="今日の運勢を占うおみくじ！")
+async def omikuji_command(interaction: discord.Interaction):
+    results = [
+        ("大吉", "🌟 大吉！すべてが順調に進む最高の一日！", discord.Color.gold()),
+        ("中吉", "✨ 中吉！いいことがありそうな予感。", discord.Color.green()),
+        ("小吉", "🍀 小吉！ささやかな幸せが見つかるかも。", discord.Color.blue()),
+        ("吉", "⚡ 吉！安定した平穏な一日。", discord.Color.purple()),
+        ("末吉", "☔ 末吉！少し慎重にいこう。", discord.Color.dark_grey()),
+        ("凶", "⚠️ 凶！思わぬハプニングに気をつけて！", discord.Color.red())
+    ]
+    title, desc, color = random.choice(results)
+    embed = discord.Embed(
+        title=f"⛩️ おみくじ結果: 【{title}】",
+        description=f"占者: {interaction.user.mention}\n\n{desc}",
+        color=color
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 🎮 ミニゲーム3: ロシアンルーレット (/russian)
+# ==========================================
+class RussianView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=30.0)
+        self.user_id = user_id
+        self.danger_slot = random.randint(1, 4)
+
+        for i in range(1, 5):
+            btn = discord.ui.Button(label=f"レバー {i}", style=discord.ButtonStyle.secondary, custom_id=str(i))
+            btn.callback = self.callback
+            self.add_item(btn)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("これはあなたのゲームではありません！", ephemeral=True)
+            return
+
+        selected = int(interaction.data["custom_id"])
+
+        for item in self.children:
+            item.disabled = True
+
+        if selected == self.danger_slot:
+            embed = discord.Embed(
+                title="💥 ドカーン！ハズレ（当たり）！",
+                description=f"レバー **{selected}** を引いたらハズレでした…！ざんねん！",
+                color=discord.Color.red()
+            )
+        else:
+            embed = discord.Embed(
+                title="🎉 セーフ！大当たり！",
+                description=f"レバー **{selected}** は安全でした！おめでとうございます！",
+                color=discord.Color.green()
+            )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+@bot.tree.command(name="russian", description="4つのレバーから1つを選ぶロシアンルーレット！")
+async def russian_command(interaction: discord.Interaction):
+    view = RussianView(user_id=interaction.user.id)
+    embed = discord.Embed(
+        title="🔫 ロシアンルーレット",
+        description="4つのレバーの中に1つだけハズレ（爆発）があります。安全そうなレバーを選んでね！",
+        color=discord.Color.orange()
+    )
+    await interaction.response.send_message(embed=embed, view=view)
+
+# ==========================================
+# 🎮 ミニゲーム4: 2択クイズ (/abtest)
+# ==========================================
+class ABTestView(discord.ui.View):
+    def __init__(self, user_id, question_data):
+        super().__init__(timeout=30.0)
+        self.user_id = user_id
+        self.q_data = question_data
+
+        btn_a = discord.ui.Button(label=self.q_data["a"], style=discord.ButtonStyle.primary, custom_id="A")
+        btn_a.callback = self.callback
+        self.add_item(btn_a)
+
+        btn_b = discord.ui.Button(label=self.q_data["b"], style=discord.ButtonStyle.success, custom_id="B")
+        btn_b.callback = self.callback
+        self.add_item(btn_b)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("これはあなたのゲームではありません！", ephemeral=True)
+            return
+
+        selected = interaction.data["custom_id"]
+
+        for item in self.children:
+            item.disabled = True
+
+        choice_text = self.q_data["a"] if selected == "A" else self.q_data["b"]
+        embed = discord.Embed(
+            title="💡 2択クイズ回答完了！",
+            description=f"あなたが選んだのは **{choice_text}** です！\n直感を信じてお疲れ様でした！",
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+@bot.tree.command(name="abtest", description="ランダムな2択の質問に答えるミニゲーム！")
+async def abtest_command(interaction: discord.Interaction):
+    questions = [
+        {"title": "休日に出かけるならどっち？", "a": "インドア（家でまったり）", "b": "アウトドア（外でお出かけ）"},
+        {"title": "朝食はどっち派？", "a": "ごはん（和食）", "b": "パン（洋食）"},
+        {"title": "旅行に行くならどっち？", "a": "山・自然", "b": "海・リゾート"},
+        {"title": "メール派？電話派？", "a": "チャット・メール派", "b": "通話・電話派"}
+    ]
+    q = random.choice(questions)
+    view = ABTestView(user_id=interaction.user.id, question_data=q)
+
+    embed = discord.Embed(
+        title=f"❓ どっちを選ぶ？ 2択クイズ",
+        description=f"**{q['title']}**\n\n下のボタンから直感で選んでね！",
+        color=discord.Color.blurple()
+    )
+    await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
 # スラッシュコマンドの実装 (/create & /quiz)
@@ -441,19 +626,16 @@ async def quiz_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
-# 🛠️ BOT管理部専用 !botinfo コマンド
+# 🛠️ BOT管理部専用 !botinfo & !restart コマンド
 # ==========================================
 import psutil
 
-# 許可された管理部のロールIDリスト
 ADMIN_ROLE_IDS = [1510021467167789104, 1528521149582151751]
 
-# エラーログと起動時間・オンライン時間の初期化
 error_logs = []
 bot_start_time = time.time()
 bot_last_online_time = time.time()
 
-# 他の処理を邪魔しない独立したエラーキャッチ
 @bot.event
 async def on_error(event, *args, **kwargs):
     import traceback
@@ -465,46 +647,37 @@ async def on_error(event, *args, **kwargs):
 
 @bot.command(name="botinfo")
 async def botinfo_command(ctx):
-    # 1. 権限チェック（実行者のロールIDリスト内に許可されたロールIDが含まれているかチェック）
     user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
     has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
 
     if not has_permission:
-        # ロールを持っていない場合は無視して処理終了
         return
 
     global bot_last_online_time
-    bot_last_online_time = time.time()  # コマンドが実行できた＝オンラインなので時刻更新
+    bot_last_online_time = time.time()
 
-    # 2. 各種ステータスの計算
-    # Ping (応答速度)
     ping = round(bot.latency * 1000) if bot.latency is not None else 0
     
-    # メモリ使用率 (Render無料枠 512MB基準)
     process = psutil.Process(os.getpid())
     mem_bytes = process.memory_info().rss
     mem_mb = round(mem_bytes / (1024 * 1024), 1)
     mem_percent = round((mem_mb / 512) * 100, 1)
 
-    # 起動してからの経過時間
     uptime_seconds = int(time.time() - bot_start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     
-    # 時刻のフォーマット化 (日本時間)
     start_str = time.strftime("%Y/%m/%d %H:%M", time.localtime(bot_start_time))
     online_str = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(bot_last_online_time))
 
-    # 3. エラー表示の生成
     if error_logs:
         error_content = "\n".join([f"{i+1}. `{log}`" for i, log in enumerate(error_logs)])
     else:
         error_content = "なし"
 
-    # 4. 埋め込みメッセージ（Embed）で出力
     embed = discord.Embed(title="🤖 Bot稼働状況", color=0x00ff00)
     embed.add_field(name="● 現在のステータス", value="正常稼働中", inline=False)
-    embed.add_field(name="● Discord API接続状況", value="良好（Connected）\n*※ここが「切断（Disconnected）」ならゾンビ状態です*", inline=False)
+    embed.add_field(name="● Discord API接続状況", value="良好（Connected）", inline=False)
     embed.add_field(name="● 応答速度 (Ping)", value=f"{ping} ms", inline=False)
     embed.add_field(name="● メモリ使用率", value=f"{mem_percent}% ({mem_mb}MB / 512MB)", inline=False)
     embed.add_field(name="● 本日のエラー発生数", value=f"{len(error_logs)} 件 ⚠️", inline=False)
@@ -514,6 +687,20 @@ async def botinfo_command(ctx):
 
     await ctx.send(embed=embed)
 
+# 🔄 Render再起動用 !restart コマンド
+@bot.command(name="restart")
+async def restart_command(ctx):
+    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+    has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
+
+    if not has_permission:
+        return
+
+    await ctx.send("🔄 ボットを再起動しています... (Render側で自動再起動されます)")
+    print("⚠️ [管理者操作] !restart コマンドによりプロセスを終了します。")
+    await bot.close()
+    sys.exit(0)
+
 # ==========================================
 # 起動処理
 # ==========================================
@@ -521,9 +708,6 @@ async def botinfo_command(ctx):
 async def on_ready():
     print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
     
-    # ------------------------------------------
-    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
-    # ------------------------------------------
     print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
     try:
         await sub.setup_sub_system(bot)
@@ -533,32 +717,20 @@ async def on_ready():
 
     print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
     sub.setup_slash_commands(bot)
-    # ------------------------------------------
-    # 🛠️ ここまで
-    # ------------------------------------------
 
-    # ------------------------------------------
-    # 🛠️ ここから Quiz.py (自己推薦設定データ) の復旧処理【追加】
-    # ------------------------------------------
     print("🔄 [起動処理] quiz.py の設定データをDiscordから復旧中...")
     try:
         await load_config_from_discord(bot)
         print("✅ [起動処理] quiz.py のデータ復旧が完了しました。")
     except Exception as e:
         print(f"❌ [起動処理] quiz.py データ復旧中にエラーが発生しました: {e}")
-    # ------------------------------------------
-    # 🛠️ ここまで【追加】
-    # ------------------------------------------
 
-    # 🧹 重複防止：一旦古いコマンド設定をクリアしてから全体同期
     print("⚡ [起動処理] コマンドの重複をクリアして再同期中...")
     try:
-        # 参加している各サーバーの個別（ギルド）コマンドを削除
         for guild in bot.guilds:
             bot.tree.clear_commands(guild=guild)
             await bot.tree.sync(guild=guild)
 
-        # グローバル（全体）コマンドとして1つだけ同期
         synced = await bot.tree.sync()
         print(f"🚀 {len(synced)} 個のコマンドを同期しました。(重複解消済み)")
     except Exception as e:
@@ -571,4 +743,4 @@ if __name__ == "__main__":
     if token:
         bot.run(token)
     else:
-        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていません。")
+        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていないか、見つかりません。")
