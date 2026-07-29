@@ -11,6 +11,7 @@ import io
 CONFIG_CHANNEL_ID = 1526289865719943329  # 設定保存用チャンネルID
 LOG_CHANNEL_ID = 1510042822533840936     # ログ送信先チャンネルID
 ADMIN_ROLE_ID = 1510405214811852900      # 基準となる管理者ロールID
+PANEL_AUTO_SEND_CHANNEL_ID = 1531834782881808566  # 再起動時自動送信先チャンネルID
 
 config_message_id = None
 
@@ -510,10 +511,32 @@ class AdminPanelEditView(discord.ui.View):
         await interaction.channel.send(embed=embed, view=QuizUserPanelView())
         await interaction.response.send_message("✅ このチャンネルに応募用パネルを送信しました！", ephemeral=True)
 
+async def auto_send_user_panel(bot: commands.Bot):
+    """起動時に指定のチャンネルへ応募パネルを自動送信する"""
+    await bot.wait_until_ready()
+    try:
+        channel = bot.get_channel(PANEL_AUTO_SEND_CHANNEL_ID)
+        if channel is None:
+            channel = await bot.fetch_channel(PANEL_AUTO_SEND_CHANNEL_ID)
+        
+        if channel:
+            embed = discord.Embed(
+                title="✨ 自己推薦・応募受付",
+                description="下のメニューから応募したい部署を選択してください。",
+                color=discord.Color.green()
+            )
+            await channel.send(embed=embed, view=QuizUserPanelView())
+            print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) へ応募パネルを自動送信しました。")
+    except Exception as e:
+        print(f"❌ [Quiz] 応募パネルの自動送信に失敗しました: {e}")
+
 def setup_quiz_commands(bot: commands.Bot):
     bot.add_view(AdminPanelEditView(bot))
     bot.add_view(QuizUserPanelView())
     bot.add_view(ReadyCheckView())
+
+    # 起動時の自動送信タスクを登録
+    bot.loop.create_task(auto_send_user_panel(bot))
 
     @bot.command(name="recommendadminpanel")
     async def recommend_admin_panel(ctx: commands.Context):
