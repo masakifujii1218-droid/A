@@ -506,60 +506,6 @@ async def russian_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 # ==========================================
-# 🎮 ミニゲーム4: 2択クイズ (/abtest)
-# ==========================================
-class ABTestView(discord.ui.View):
-    def __init__(self, user_id, question_data):
-        super().__init__(timeout=30.0)
-        self.user_id = user_id
-        self.q_data = question_data
-
-        btn_a = discord.ui.Button(label=self.q_data["a"], style=discord.ButtonStyle.primary, custom_id="A")
-        btn_a.callback = self.callback
-        self.add_item(btn_a)
-
-        btn_b = discord.ui.Button(label=self.q_data["b"], style=discord.ButtonStyle.success, custom_id="B")
-        btn_b.callback = self.callback
-        self.add_item(btn_b)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("これはあなたのゲームではありません！", ephemeral=True)
-            return
-
-        selected = interaction.data["custom_id"]
-
-        for item in self.children:
-            item.disabled = True
-
-        choice_text = self.q_data["a"] if selected == "A" else self.q_data["b"]
-        embed = discord.Embed(
-            title="💡 2択クイズ回答完了！",
-            description=f"あなたが選んだのは **{choice_text}** です！\n直感を信じてお疲れ様でした！",
-            color=discord.Color.blue()
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
-
-@bot.tree.command(name="abtest", description="ランダムな2択の質問に答えるミニゲーム！")
-async def abtest_command(interaction: discord.Interaction):
-    questions = [
-        {"title": "休日に出かけるならどっち？", "a": "インドア（家でまったり）", "b": "アウトドア（外でお出かけ）"},
-        {"title": "朝食はどっち派？", "a": "ごはん（和食）", "b": "パン（洋食）"},
-        {"title": "旅行に行くならどっち？", "a": "山・自然", "b": "海・リゾート"},
-        {"title": "メール派？電話派？", "a": "チャット・メール派", "b": "通話・電話派"}
-    ]
-    q = random.choice(questions)
-    view = ABTestView(user_id=interaction.user.id, question_data=q)
-
-    embed = discord.Embed(
-        title=f"❓ どっちを選ぶ？ 2択クイズ",
-        description=f"**{q['title']}**\n\n下のボタンから直感で選んでね！",
-        color=discord.Color.blurple()
-    )
-    await interaction.response.send_message(embed=embed, view=view)
-
-# ==========================================
 # スラッシュコマンドの実装 (/create & /quiz)
 # ==========================================
 @bot.tree.command(name="create", description="新しいダイヤを作成し、各駅の時刻表を出力します。")
