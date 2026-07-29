@@ -591,17 +591,13 @@ async def on_ready():
     # 🛠️ ここまで【追加】
     # ------------------------------------------
 
-    # 🧹 重複防止：一旦古いコマンド設定をクリアしてから全体同期
-    print("⚡ [起動処理] コマンドの重複をクリアして再同期中...")
+    # ⚡ 修正：全サーバーへギルドコマンドとして即時一律同期
+    print("⚡ [起動処理] 各サーバーへコマンドを即時同期中...")
     try:
-        # 参加している各サーバーの個別（ギルド）コマンドを削除
         for guild in bot.guilds:
-            bot.tree.clear_commands(guild=guild)
-            await bot.tree.sync(guild=guild)
-
-        # グローバル（全体）コマンドとして1つだけ同期
-        synced = await bot.tree.sync()
-        print(f"🚀 {len(synced)} 個のコマンドを同期しました。(重複解消済み)")
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"🚀 サーバー [{guild.name}] に {len(synced)} 個のコマンドを即時同期しました！")
     except Exception as e:
         print(f"同期エラー: {e}")
 
