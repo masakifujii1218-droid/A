@@ -262,7 +262,13 @@ class ReadyCheckView(discord.ui.View):
             print(f"⚠️ メッセージ編集エラー: {e}")
         
         applicant = self.applicant or interaction.user
-        await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, self.questions)
+        
+        # 永続化されたViewからの復元時に質問データが空の場合、設定から再取得する
+        questions = self.questions
+        if not questions and self.dept_name:
+            questions = quiz_config.get("departments", {}).get(self.dept_name, {}).get("questions", [])
+
+        await start_quiz_session(interaction.channel, applicant, interaction.client, self.dept_name, questions)
 
 class QuizUserPanelSelect(discord.ui.Select):
     def __init__(self):
@@ -536,7 +542,7 @@ def setup_quiz_commands(bot: commands.Bot):
     bot.add_view(ReadyCheckView())
 
     # 起動時の自動送信タスクを登録
-    bot.loop.create_task(auto_send_user_panel(bot))
+    asyncio.create_task(auto_send_user_panel(bot))
 
     @bot.command(name="recommendadminpanel")
     async def recommend_admin_panel(ctx: commands.Context):
