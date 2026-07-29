@@ -10,8 +10,11 @@ import sys
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
 
-# 🛠️ 自己推薦システム（Quiz.py）をインポート【追加】
+# 🛠️ 自己推薦システム（Quiz.py）をインポート
 from quiz import load_config_from_discord, setup_quiz_commands
+
+# 🛠️ ミニゲームシステム（game.py）をインポート【追加】
+import game
 
 # ==========================================
 # Flask (RenderやUptimeRobot等の死活監視用)
@@ -62,7 +65,7 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録【追加】
+# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録
 setup_quiz_commands(bot)
 
 # ==========================================
@@ -563,7 +566,7 @@ async def on_ready():
     # ------------------------------------------
 
     # ------------------------------------------
-    # 🛠️ ここから Quiz.py (自己推薦設定データ) の復旧処理【追加】
+    # 🛠️ ここから Quiz.py (自己推薦設定データ) の復旧処理
     # ------------------------------------------
     print("🔄 [起動処理] Quiz.py の設定データをDiscordから復旧中...")
     try:
@@ -571,6 +574,19 @@ async def on_ready():
         print("✅ [起動処理] Quiz.py のデータ復旧が完了しました。")
     except Exception as e:
         print(f"❌ [起動処理] Quiz.py データ復旧中にエラーが発生しました: {e}")
+    # ------------------------------------------
+    # 🛠️ ここまで
+    # ------------------------------------------
+
+    # ------------------------------------------
+    # 🛠️ ここから game.py (ミニゲーム機能) の登録処理【追加】
+    # ------------------------------------------
+    print("🎮 [起動処理] game.py のミニゲームコマンドを登録中...")
+    try:
+        game.setup_game_commands(bot)
+        print("✅ [起動処理] game.py のコマンド登録が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] game.py 登録中にエラーが発生しました: {e}")
     # ------------------------------------------
     # 🛠️ ここまで【追加】
     # ------------------------------------------
