@@ -8,10 +8,10 @@ import io
 # ==========================================
 # 永続化用チャンネル・メッセージ・ロール管理
 # ==========================================
-CONFIG_CHANNEL_ID = 1526289865719943329  # 設定保存用チャンネルID
+CONFIG_CHANNEL_ID = 1526289865719943329   # 設定保存用チャンネルID
 LOG_CHANNEL_ID = 1510042822533840936     # ログ送信先チャンネルID
 ADMIN_ROLE_ID = 1510405214811852900      # 基準となる管理者ロールID
-PANEL_AUTO_SEND_CHANNEL_ID = 1531834782881808566  # 再起動時自動送信先チャンネルID
+PANEL_AUTO_SEND_CHANNEL_ID = 1531834782881808566  # 再起動時自動送信・更新先チャンネルID
 
 config_message_id = None
 
@@ -41,7 +41,6 @@ def is_admin_role_or_higher(user: discord.Member) -> bool:
 
     target_role = user.guild.get_role(ADMIN_ROLE_ID)
     if not target_role:
-        # ロールが見つからない場合は安全のためDiscordの管理者権限で判定
         return user.guild_permissions.administrator
 
     # ユーザーが持つ最高位ロールの位置が、指定ロールの位置以上かチェック
@@ -263,7 +262,6 @@ class ReadyCheckView(discord.ui.View):
         
         applicant = self.applicant or interaction.user
         
-        # 永続化されたViewからの復元時に質問データが空の場合、設定から再取得する
         questions = self.questions
         if not questions and self.dept_name:
             questions = quiz_config.get("departments", {}).get(self.dept_name, {}).get("questions", [])
@@ -299,17 +297,14 @@ class QuizUserPanelSelect(discord.ui.Select):
         user = interaction.user
         channel_name = f"{dept_name}-{user.name}".lower()
 
-        # 基本権限（応募者本人とBOTのみ許可、全体は非表示）
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
 
-        # 基準となる管理者ロールを取得
         base_admin_role = guild.get_role(ADMIN_ROLE_ID)
         
-        # 基準ロール以上のすべてのロールに閲覧・送信権限を付与
         if base_admin_role:
             for role in guild.roles:
                 if role.position >= base_admin_role.position:
@@ -563,16 +558,13 @@ async def auto_send_user_panel(bot: commands.Bot):
         print(f"❌ [Quiz] 応募パネルの送信・更新に失敗しました: {e}")
 
 def setup_quiz_commands(bot: commands.Bot):
-    # Botのon_readyイベント時に安全にバックグラウンドタスクを登録するよう変更
     @bot.listen('on_ready')
     async def on_quiz_ready():
-        # 重複起動を防ぐためのタスク登録チェック
         if not hasattr(bot, '_quiz_auto_send_task') or bot._quiz_auto_send_task.done():
             bot._quiz_auto_send_task = bot.loop.create_task(auto_send_user_panel(bot))
 
     @bot.command(name="recommendadminpanel")
     async def recommend_admin_panel(ctx: commands.Context):
-        # 指定ロール、またはそれより高順位のロールを持つユーザーのみ許可
         if not is_admin_role_or_higher(ctx.author):
             await ctx.send("❌ このコマンドを実行する権限がありません。")
             return
@@ -599,4 +591,3 @@ def setup_quiz_commands(bot: commands.Bot):
             color=discord.Color.orange()
         )
         await ctx.send(embed=embed, view=CloseConfirmView())
-        
