@@ -547,8 +547,12 @@ async def auto_send_user_panel(bot: commands.Bot):
         print(f"❌ [Quiz] 応募パネルの自動送信に失敗しました: {e}")
 
 def setup_quiz_commands(bot: commands.Bot):
-    # 起動時の自動送信・設定復旧タスクを登録
-    asyncio.create_task(auto_send_user_panel(bot))
+    # Botのon_readyイベント時に安全にバックグラウンドタスクを登録するよう変更
+    @bot.listen('on_ready')
+    async def on_quiz_ready():
+        # 重複起動を防ぐためのタスク登録チェック
+        if not hasattr(bot, '_quiz_auto_send_task') or bot._quiz_auto_send_task.done():
+            bot._quiz_auto_send_task = bot.loop.create_task(auto_send_user_panel(bot))
 
     @bot.command(name="recommendadminpanel")
     async def recommend_admin_panel(ctx: commands.Context):
