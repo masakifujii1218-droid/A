@@ -5,16 +5,12 @@ import random
 import threading
 import time
 import asyncio
-import sys
 
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
 
-# 🛠️ 自己推薦システム（Quiz.py）をインポート
-from quiz import load_config_from_discord, setup_quiz_commands
-
-# 🛠️ ミニゲームシステム（game.py）をインポート
-import game
+# 🛠️ 自己推薦システム（Quiz.py）をインポート【追加】
+from Quiz import load_config_from_discord, setup_quiz_commands
 
 # ==========================================
 # Flask (RenderやUptimeRobot等の死活監視用)
@@ -65,16 +61,11 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🛠️ 【修正点②】各システムのコマンド登録をBot起動前（グローバルスコープ）に集約
+# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録【追加】
 setup_quiz_commands(bot)
-sub.setup_slash_commands(bot)
-try:
-    game.setup_game_commands(bot)
-except Exception as e:
-    print(f"game.py コマンド登録エラー: {e}")
 
 # ==========================================
-# JSON 永続化データ管理 (安全な保存処理に強化)
+# JSON 永続化データ管理
 # ==========================================
 DATA_FILE = "trains.json"
 USAGE_FILE = "usage.json"
@@ -86,15 +77,9 @@ def load_trains():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# 🛠️ 【修正点⑤】ファイル破壊を防ぐアトミック書き込み
 def save_trains(data):
-    try:
-        temp_file = DATA_FILE + ".tmp"
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        os.replace(temp_file, DATA_FILE)
-    except OSError as e:
-        print(f"trains.json 保存エラー: {e}")
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 def load_usage_data():
     if not os.path.exists(USAGE_FILE):
@@ -105,15 +90,12 @@ def load_usage_data():
     except (json.JSONDecodeError, OSError):
         return {}
 
-# 🛠️ 【修正点⑤】ファイル破壊を防ぐアトミック書き込み
 def save_usage_data(data):
     try:
-        temp_file = USAGE_FILE + ".tmp"
-        with open(temp_file, "w", encoding="utf-8") as f:
+        with open(USAGE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-        os.replace(temp_file, USAGE_FILE)
-    except OSError as e:
-        print(f"usage.json 保存エラー: {e}")
+    except OSError:
+        pass
 
 # ==========================================
 # 権限・クールダウン設定
@@ -311,31 +293,27 @@ def calculate_times(route_name, train_type, start_station, end_station, start_ti
         next_st = stations[next_idx]
 
         section = (curr_st, next_st) if is_down else (next_st, curr_st)
+        if section in route_data:
+            travel_time_sec = route_data[section]
+            current_time += timedelta(seconds=travel_time_sec)
+            
+            if next_st in stops:
+                arr_time = current_time
+                if next_idx == end_idx:
+                    timetable.append({
+                        "station": next_st,
+                        "arr": arr_time.strftime("%H:%M"),
+                        "dep": "--:--"
+                    })
+                else:
+                    dep_time = arr_time + timedelta(seconds=STOP_TIME)
+                    timetable.append({
+                        "station": next_st,
+                        "arr": arr_time.strftime("%H:%M"),
+                        "dep": dep_time.strftime("%H:%M")
+                    })
+                    current_time = dep_time
         
-        # 🛠️ 【修正点④】未定義区間での無限ループ防止
-        if section not in route_data:
-            return None, f"区間データが存在しません: {curr_st} ↔ {next_st}"
-
-        travel_time_sec = route_data[section]
-        current_time += timedelta(seconds=travel_time_sec)
-        
-        if next_st in stops:
-            arr_time = current_time
-            if next_idx == end_idx:
-                timetable.append({
-                    "station": next_st,
-                    "arr": arr_time.strftime("%H:%M"),
-                    "dep": "--:--"
-                })
-            else:
-                dep_time = arr_time + timedelta(seconds=STOP_TIME)
-                timetable.append({
-                    "station": next_st,
-                    "arr": arr_time.strftime("%H:%M"),
-                    "dep": dep_time.strftime("%H:%M")
-                })
-                current_time = dep_time
-    
         current_idx = next_idx
 
     return timetable, None
@@ -369,16 +347,17 @@ class QuizView(discord.ui.View):
             item.disabled = True
 
         if selected_answer == correct_answer:
-            # 🛠️ 【修正点③】確実にクールダウンをリセットする処理
+            # 【クールダウンリセット連携】
             usage_data = load_usage_data()
             user_id_str = str(interaction.user.id)
-            
-            if user_id_str not in usage_data:
-                usage_data[user_id_str] = {}
-            
-            usage_data[user_id_str]["create"] = []
-            save_usage_data(usage_data)
-            benefit_text = "\n🎉 **ご褒美:** `/create` のクールダウン制限が完全にリセットされました！今すぐ作成可能です！"
+            if user_id_str in usage_data:
+                # create コマンドの履歴（クールダウン）を完全にリセット
+                if "create" in usage_data[user_id_str]:
+                    usage_data[user_id_str]["create"] = []
+                save_usage_data(usage_data)
+                benefit_text = "\n🎉 **ご褒美:** `/create` のクールダウン制限が完全にリセットされました！今すぐ作成可能です！"
+            else:
+                benefit_text = "\n🎉 **ご褒美:** クールダウンは元々ありませんが、これでいつでも作成可能です！"
 
             embed = discord.Embed(
                 title="🟢 正解！",
@@ -466,12 +445,15 @@ async def quiz_command(interaction: discord.Interaction):
 # ==========================================
 import psutil
 
+# 許可された管理部のロールIDリスト
 ADMIN_ROLE_IDS = [1510021467167789104, 1528521149582151751]
 
+# エラーログと起動時間・オンライン時間の初期化
 error_logs = []
 bot_start_time = time.time()
 bot_last_online_time = time.time()
 
+# 他の処理を邪魔しない独立したエラーキャッチ
 @bot.event
 async def on_error(event, *args, **kwargs):
     import traceback
@@ -483,36 +465,46 @@ async def on_error(event, *args, **kwargs):
 
 @bot.command(name="botinfo")
 async def botinfo_command(ctx):
+    # 1. 権限チェック（実行者のロールIDリスト内に許可されたロールIDが含まれているかチェック）
     user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
     has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
 
     if not has_permission:
+        # ロールを持っていない場合は無視して処理終了
         return
 
     global bot_last_online_time
-    bot_last_online_time = time.time()
+    bot_last_online_time = time.time()  # コマンドが実行できた＝オンラインなので時刻更新
 
+    # 2. 各種ステータスの計算
+    # Ping (応答速度)
     ping = round(bot.latency * 1000) if bot.latency is not None else 0
+    
+    # メモリ使用率 (Render無料枠 512MB基準)
     process = psutil.Process(os.getpid())
     mem_bytes = process.memory_info().rss
     mem_mb = round(mem_bytes / (1024 * 1024), 1)
     mem_percent = round((mem_mb / 512) * 100, 1)
 
+    # 起動してからの経過時間
     uptime_seconds = int(time.time() - bot_start_time)
     hours, remainder = divmod(uptime_seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     
+    # 時刻のフォーマット化 (日本時間)
     start_str = time.strftime("%Y/%m/%d %H:%M", time.localtime(bot_start_time))
     online_str = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(bot_last_online_time))
 
+    # 3. エラー表示の生成
     if error_logs:
         error_content = "\n".join([f"{i+1}. `{log}`" for i, log in enumerate(error_logs)])
     else:
         error_content = "なし"
 
+    # 4. 埋め込みメッセージ（Embed）で出力
     embed = discord.Embed(title="🤖 Bot稼働状況", color=0x00ff00)
     embed.add_field(name="● 現在のステータス", value="正常稼働中", inline=False)
-    embed.add_field(name="● Discord API接続状況", value="良好（Connected）", inline=False)
+    embed.add_field(name="● Discord API接続状況", value="良好（Connected）\n*※ここが「切断（Disconnected）」ならゾンビ状態です*", inline=False)
     embed.add_field(name="● 応答速度 (Ping)", value=f"{ping} ms", inline=False)
     embed.add_field(name="● メモリ使用率", value=f"{mem_percent}% ({mem_mb}MB / 512MB)", inline=False)
     embed.add_field(name="● 本日のエラー発生数", value=f"{len(error_logs)} 件 ⚠️", inline=False)
@@ -523,25 +515,6 @@ async def botinfo_command(ctx):
     await ctx.send(embed=embed)
 
 # ==========================================
-# 🛠️ 指定ロール専用 !restart コマンド
-# ==========================================
-RESTART_ALLOWED_ROLE_IDS = [1528521149582151751, 1510405214811852900]
-
-@bot.command(name="restart")
-async def restart_command(ctx):
-    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
-    has_permission = any(role_id in RESTART_ALLOWED_ROLE_IDS for role_id in user_role_ids)
-
-    if not has_permission:
-        return
-
-    await ctx.send("🔄 **Botを再起動しています...**\n※自動再起動システムにより数秒〜数十秒で復帰します。")
-    print(f"🔄 [再起動] {ctx.author} によって !restart が実行されました。")
-
-    await bot.close()
-    sys.exit(0)
-
-# ==========================================
 # 起動処理
 # ==========================================
 @bot.event
@@ -549,7 +522,7 @@ async def on_ready():
     print(f"ログインしました: {bot.user.name} (ID: {bot.user.id})")
     
     # ------------------------------------------
-    # 🛠️ sub.py データベース初期化処理
+    # 🛠️ ここから sub.py (ポイント・チケット) のドッキング処理
     # ------------------------------------------
     print("🔄 [起動処理] Discordから最新データベースの読み込みを開始します...")
     try:
@@ -558,23 +531,36 @@ async def on_ready():
     except Exception as e:
         print(f"❌ [起動処理] データベース同期中にエラーが発生しました: {e}")
 
+    print("⚙️ [起動処理] sub.py のスラッシュコマンドを登録中...")
+    sub.setup_slash_commands(bot)
     # ------------------------------------------
-    # 🛠️ Quiz.py 設定データ復旧処理
+    # 🛠️ ここまで
     # ------------------------------------------
-    print("🔄 [起動処理] Quiz.py の設定データをDiscordから復旧中...")
-    try:
-        await load_config_from_discord(bot)
-        print("✅ [起動処理] Quiz.py のデータ復旧が完了しました。")
-    except Exception as e:
-        print(f"❌ [起動処理] Quiz.py データ復旧中にエラーが発生しました: {e}")
 
     # ------------------------------------------
-    # ⚡ 【修正点①】安全で確実なスラッシュコマンド同期
+    # 🛠️ ここから Quiz.py (自己推薦設定データ) の復旧処理【追加】
     # ------------------------------------------
-    print("⚡ [起動処理] スラッシュコマンドをDiscord本部に同期中...")
+    print("🔄 [起動処理] quiz.py の設定データをDiscordから復旧中...")
     try:
+        await load_config_from_discord(bot)
+        print("✅ [起動処理] quiz.py のデータ復旧が完了しました。")
+    except Exception as e:
+        print(f"❌ [起動処理] quiz.py データ復旧中にエラーが発生しました: {e}")
+    # ------------------------------------------
+    # 🛠️ ここまで【追加】
+    # ------------------------------------------
+
+    # 🧹 重複防止：一旦古いコマンド設定をクリアしてから全体同期
+    print("⚡ [起動処理] コマンドの重複をクリアして再同期中...")
+    try:
+        # 参加している各サーバーの個別（ギルド）コマンドを削除
+        for guild in bot.guilds:
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+
+        # グローバル（全体）コマンドとして1つだけ同期
         synced = await bot.tree.sync()
-        print(f"🚀 合計 {len(synced)} 個のスラッシュコマンドを正常に同期しました！")
+        print(f"🚀 {len(synced)} 個のコマンドを同期しました。(重複解消済み)")
     except Exception as e:
         print(f"同期エラー: {e}")
 
