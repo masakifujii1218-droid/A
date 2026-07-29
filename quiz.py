@@ -519,7 +519,7 @@ class AdminPanelEditView(discord.ui.View):
         await interaction.response.send_message("✅ このチャンネルに応募用パネルを送信しました！", ephemeral=True)
 
 async def auto_send_user_panel(bot: commands.Bot):
-    """起動時に設定データをロードし、永続Viewを登録して指定のチャンネルへ応募パネルを自動送信する"""
+    """起動時に設定データをロードし、永続Viewを登録して指定のチャンネルへ応募パネルを自動更新・送信する"""
     await bot.wait_until_ready()
     
     # 復旧処理を実行
@@ -541,10 +541,26 @@ async def auto_send_user_panel(bot: commands.Bot):
                 description="下のメニューから応募したい部署を選択してください。",
                 color=discord.Color.green()
             )
-            await channel.send(embed=embed, view=QuizUserPanelView())
-            print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) へ応募パネルを自動送信しました。")
+            
+            # チャンネルの過去メッセージ（最新20件）を検索して、BOT自身が送信した既存パネルを探す
+            existing_message = None
+            async for msg in channel.history(limit=20):
+                if msg.author.id == bot.user.id and msg.embeds:
+                    if msg.embeds[0].title == "✨ 自己推薦・応募受付":
+                        existing_message = msg
+                        break
+
+            if existing_message:
+                # 既存パネルが存在する場合は編集更新（最新の部署選択メニューに更新）
+                await existing_message.edit(embed=embed, view=QuizUserPanelView())
+                print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) の既存応募パネルを編集・更新しました。")
+            else:
+                # 存在しない場合は新規送信
+                await channel.send(embed=embed, view=QuizUserPanelView())
+                print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) へ新規に応募パネルを送信しました。")
+
     except Exception as e:
-        print(f"❌ [Quiz] 応募パネルの自動送信に失敗しました: {e}")
+        print(f"❌ [Quiz] 応募パネルの送信・更新に失敗しました: {e}")
 
 def setup_quiz_commands(bot: commands.Bot):
     # Botのon_readyイベント時に安全にバックグラウンドタスクを登録するよう変更
@@ -583,3 +599,4 @@ def setup_quiz_commands(bot: commands.Bot):
             color=discord.Color.orange()
         )
         await ctx.send(embed=embed, view=CloseConfirmView())
+        
