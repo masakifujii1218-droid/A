@@ -396,11 +396,12 @@ class AddQuestionsModal(discord.ui.Modal):
             return
 
         lines = [line.strip() for line in self.questions_text.value.split("\n") if line.strip()]
-        current_len = len(dept_data.get("questions", []))
+        questions_list = dept_data.setdefault("questions", [])
+        current_len = len(questions_list)
         added_count = 0
         for i, line in enumerate(lines):
             new_id = current_len + i + 1
-            dept_data["questions"].append({"id": new_id, "question": line})
+            questions_list.append({"id": new_id, "question": line})
             added_count += 1
 
         await save_config_to_discord(self.bot_ref)
@@ -518,8 +519,17 @@ class AdminPanelEditView(discord.ui.View):
         await interaction.response.send_message("✅ このチャンネルに応募用パネルを送信しました！", ephemeral=True)
 
 async def auto_send_user_panel(bot: commands.Bot):
-    """起動時に指定のチャンネルへ応募パネルを自動送信する"""
+    """起動時に設定データをロードし、永続Viewを登録して指定のチャンネルへ応募パネルを自動送信する"""
     await bot.wait_until_ready()
+    
+    # 復旧処理を実行
+    await load_config_from_discord(bot)
+    
+    # 設定ロード後に各種Viewを永続化登録
+    bot.add_view(AdminPanelEditView(bot))
+    bot.add_view(QuizUserPanelView())
+    bot.add_view(ReadyCheckView())
+
     try:
         channel = bot.get_channel(PANEL_AUTO_SEND_CHANNEL_ID)
         if channel is None:
@@ -537,11 +547,7 @@ async def auto_send_user_panel(bot: commands.Bot):
         print(f"❌ [Quiz] 応募パネルの自動送信に失敗しました: {e}")
 
 def setup_quiz_commands(bot: commands.Bot):
-    bot.add_view(AdminPanelEditView(bot))
-    bot.add_view(QuizUserPanelView())
-    bot.add_view(ReadyCheckView())
-
-    # 起動時の自動送信タスクを登録
+    # 起動時の自動送信・設定復旧タスクを登録
     asyncio.create_task(auto_send_user_panel(bot))
 
     @bot.command(name="recommendadminpanel")
