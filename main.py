@@ -5,6 +5,7 @@ import random
 import threading
 import time
 import asyncio
+import sys
 
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
@@ -513,6 +514,30 @@ async def botinfo_command(ctx):
     embed.add_field(name="● Bot最終オンライン時刻", value=f"{online_str} (リアルタイム)", inline=False)
 
     await ctx.send(embed=embed)
+
+# ==========================================
+# 🛠️ 指定ロール専用 !restart コマンド
+# ==========================================
+RESTART_ALLOWED_ROLE_IDS = [1528521149582151751, 1510405214811852900]
+
+@bot.command(name="restart")
+async def restart_command(ctx):
+    # 権限チェック（実行者が指定されたロールのいずれかを持っているか）
+    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+    has_permission = any(role_id in RESTART_ALLOWED_ROLE_IDS for role_id in user_role_ids)
+
+    if not has_permission:
+        # ロールを持っていない場合は無応答で終了
+        return
+
+    await ctx.send("🔄 **Botを再起動しています...**\n※自動再起動システムにより数秒〜数十秒で復帰します。")
+    print(f"🔄 [再起動] {ctx.author} によって !restart が実行されました。")
+
+    # BotをDiscordから正常ログアウト
+    await bot.close()
+
+    # プロセスを終了（Render等のホスティングサービスがこれを検知して自動再起動します）
+    sys.exit(0)
 
 # ==========================================
 # 起動処理
