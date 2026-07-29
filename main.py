@@ -10,7 +10,7 @@ import asyncio
 import sub
 
 # 🛠️ 自己推薦システム（Quiz.py）をインポート【追加】
-from Quiz import load_config_from_discord, setup_quiz_commands
+from quiz import load_config_from_discord, setup_quiz_commands
 
 # ==========================================
 # Flask (RenderやUptimeRobot等の死活監視用)
