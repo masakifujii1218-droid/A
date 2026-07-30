@@ -370,6 +370,7 @@ class QuizView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 
+
 # ==========================================
 # 🐺 人狼ゲーム システム（チャンネル内エフェメラル完全対応版）
 # ==========================================
@@ -382,6 +383,8 @@ class WolfSelect(discord.ui.Select):
             discord.SelectOption(label=p.display_name, value=str(p.id))
             for p in alive_players if p != voter
         ]
+        if not options:
+            options.append(discord.SelectOption(label="対象なし", value="none"))
         super().__init__(placeholder=placeholder_text, min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -389,11 +392,11 @@ class WolfSelect(discord.ui.Select):
             await interaction.response.send_message("これはあなた用の選択肢ではありません！", ephemeral=True)
             return
         
-        target_id = int(self.values[0])
-        target = interaction.guild.get_member(target_id)
+        target_id = self.values[0]
+        target = interaction.guild.get_member(int(target_id)) if target_id != "none" else None
         
         self.view.selected_target = target
-        await interaction.response.send_message(f"✅ 【 **{target.display_name}** 】を選択しました。", ephemeral=True)
+        await interaction.response.send_message(f"✅ 【 **{target.display_name if target else 'なし'}** 】を選択しました。", ephemeral=True)
         self.view.stop()
 
 class WolfSelectView(discord.ui.View):
@@ -443,15 +446,17 @@ class WolfLobbyView(discord.ui.View):
         await interaction.response.edit_message(embed=start_embed, view=self)
         self.stop()
 
-        session = WolfGameSession(interaction.channel, self.joined, self.host)
+        # interactionを渡すことで、followupによるエフェメラル送信を可能にする
+        session = WolfGameSession(interaction.channel, self.joined, self.host, interaction)
         active_games[interaction.channel.id] = session
         asyncio.create_task(session.run_game_loop())
 
 class WolfGameSession:
-    def __init__(self, channel, players, host):
+    def __init__(self, channel, players, host, interaction):
         self.channel = channel
         self.players = players
         self.host = host
+        self.interaction = interaction
         self.is_running = True
         
         roles_list = ["🐺 人狼"] + ["🧑‍🌾 村人"] * (len(players) - 1)
@@ -467,15 +472,20 @@ class WolfGameSession:
         return None
 
     async def run_game_loop(self):
+        # スタートボタンのinteraction.followupを使って、各プレイヤーへ個別にエフェメラル送信を試みる
         for p in self.players:
             role = self.roles[p]
             try:
-                await self.channel.send(
+                await self.interaction.followup.send(
                     f"{p.mention} さん宛の役職通知です（このメッセージはあなたにしか見えません）。\n今回のあなたの役職は【 **{role}** 】です！",
                     ephemeral=True
                 )
             except Exception:
-                pass
+                # followupが切れている場合のフォールバックとしてDMへ送信
+                try:
+                    await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！")
+                except:
+                    pass
 
         while self.is_running:
             self.day_count += 1
@@ -497,17 +507,18 @@ class WolfGameSession:
                 
                 view = WolfSelectView(self.alive, wolf, "今夜襲撃する相手を選んでね...")
                 try:
-                    await self.channel.send(
-                        f"{wolf.mention} さん、今夜襲撃する相手を選んでください：",
-                        view=view,
-                        ephemeral=True
-                    )
+                    # ここではDMまたはチャンネルへ通常のメッセージとしてビューを送信し、セレクト内のcallbackでephemeral返信を行う
+                    msg = await self.channel.send(f"🐺 {wolf.mention} さん、今夜襲撃する相手を下から選んでください：", view=view)
                 except Exception:
-                    pass
+                    continue
                 
                 await view.wait()
                 if view.selected_target:
                     killed_target = view.selected_target
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
                     break
 
             if not killed_target and self.alive:
@@ -559,10 +570,9 @@ class WolfGameSession:
             for voter in list(self.alive):
                 view = WolfSelectView(self.alive, voter, "処刑するプレイヤーを選んでね...")
                 try:
-                    await self.channel.send(
-                        f"{voter.mention} さん、【処刑投票】本日処刑するプレイヤーを選んでください：",
-                        view=view,
-                        ephemeral=True
+                    msg = await self.channel.send(
+                        f"⚖️ {voter.mention} さん、【処刑投票】本日処刑するプレイヤーを選んでください：",
+                        view=view
                     )
                 except Exception:
                     pass
@@ -570,6 +580,10 @@ class WolfGameSession:
                 await view.wait()
                 if view.selected_target:
                     votes[voter] = view.selected_target
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
                 else:
                     others = [p for p in self.alive if p != voter]
                     if others:
