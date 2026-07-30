@@ -370,9 +370,8 @@ class QuizView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 
-
 # ==========================================
-# 🐺 人狼ゲーム システム（チャンネル内エフェメラル完全対応版）
+# 🐺 人狼ゲーム システム（DM完全対応版）
 # ==========================================
 active_games = {} # { channel_id: GameSession }
 
@@ -396,7 +395,7 @@ class WolfSelect(discord.ui.Select):
         target = interaction.guild.get_member(int(target_id)) if target_id != "none" else None
         
         self.view.selected_target = target
-        await interaction.response.send_message(f"✅ 【 **{target.display_name if target else 'なし'}** 】を選択しました。", ephemeral=True)
+        await interaction.response.edit_message(content=f"✅ 【 **{target.display_name if target else 'なし'}** 】への選択を受け付けました。", view=None)
         self.view.stop()
 
 class WolfSelectView(discord.ui.View):
@@ -440,23 +439,21 @@ class WolfLobbyView(discord.ui.View):
         
         start_embed = discord.Embed(
             title="🐺 人狼ゲームが開始されました！",
-            description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーに役職を割り振りました。ゲームチャンネルを確認してください！",
+            description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーの **DM（ダイレクトメッセージ）** に役職を配布しました。確認してください！",
             color=discord.Color.dark_purple()
         )
         await interaction.response.edit_message(embed=start_embed, view=self)
         self.stop()
 
-        # interactionを渡すことで、followupによるエフェメラル送信を可能にする
-        session = WolfGameSession(interaction.channel, self.joined, self.host, interaction)
+        session = WolfGameSession(interaction.channel, self.joined, self.host)
         active_games[interaction.channel.id] = session
         asyncio.create_task(session.run_game_loop())
 
 class WolfGameSession:
-    def __init__(self, channel, players, host, interaction):
+    def __init__(self, channel, players, host):
         self.channel = channel
         self.players = players
         self.host = host
-        self.interaction = interaction
         self.is_running = True
         
         roles_list = ["🐺 人狼"] + ["🧑‍🌾 村人"] * (len(players) - 1)
@@ -472,20 +469,19 @@ class WolfGameSession:
         return None
 
     async def run_game_loop(self):
-        # スタートボタンのinteraction.followupを使って、各プレイヤーへ個別にエフェメラル送信を試みる
+        # 役職を各プレイヤーのDMへ送信
         for p in self.players:
             role = self.roles[p]
             try:
-                await self.interaction.followup.send(
-                    f"{p.mention} さん宛の役職通知です（このメッセージはあなたにしか見えません）。\n今回のあなたの役職は【 **{role}** 】です！",
-                    ephemeral=True
-                )
+                await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！この内容は他の人には秘密にしてください。")
             except Exception:
-                # followupが切れている場合のフォールバックとしてDMへ送信
-                try:
-                    await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！")
-                except:
-                    pass
+                await self.channel.send(f"{p.mention} さんのDMが閉じているため役職を送信できませんでした！設定を確認してください。", delete_after=10)
+
+        await self.channel.send(embed=discord.Embed(
+            title="🔒 役職の配布が完了しました",
+            description="全員のDMに役職を送信しました。これより夜のフェーズが始まります！",
+            color=discord.Color.dark_purple()
+        ))
 
         while self.is_running:
             self.day_count += 1
@@ -495,7 +491,7 @@ class WolfGameSession:
             
             night_embed = discord.Embed(
                 title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
-                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、自分だけに表示されるメニューから選択してください。",
+                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に届くメニューから選択してください。",
                 color=discord.Color.dark_purple()
             )
             await self.channel.send(embed=night_embed)
@@ -507,16 +503,16 @@ class WolfGameSession:
                 
                 view = WolfSelectView(self.alive, wolf, "今夜襲撃する相手を選んでね...")
                 try:
-                    # ここではDMまたはチャンネルへ通常のメッセージとしてビューを送信し、セレクト内のcallbackでephemeral返信を行う
-                    msg = await self.channel.send(f"🐺 {wolf.mention} さん、今夜襲撃する相手を下から選んでください：", view=view)
+                    await wolf.send("🐺 **【人狼の夜襲】**\n今夜襲撃する相手を下のメニューから選んでください：", view=view)
                 except Exception:
+                    await self.channel.send(f"{wolf.mention} さんのDMへの送信に失敗しました。", delete_after=10)
                     continue
                 
                 await view.wait()
                 if view.selected_target:
                     killed_target = view.selected_target
                     try:
-                        await msg.delete()
+                        await wolf.send(f"✅ 【 **{killed_target.display_name}** 】への襲撃を受け付けました。")
                     except:
                         pass
                     break
@@ -526,7 +522,7 @@ class WolfGameSession:
 
             if not self.is_running: break
 
-            # --- ☀️ 朝のフェーズ（選択直後に即時反映） ---
+            # --- ☀️ 朝のフェーズ ---
             if killed_target in self.alive:
                 self.alive.remove(killed_target)
 
@@ -561,7 +557,7 @@ class WolfGameSession:
             # --- 🗣️ 昼の議論 ＆ ⚖️ 投票フェーズ ---
             disc_embed = discord.Embed(
                 title="🗣️ 昼の議論タイム",
-                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に自分だけに表示されるメニューから処刑する相手を選びます）",
+                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に各プレイヤーのDMに処刑投票用のメニューが届きます）",
                 color=discord.Color.green()
             )
             await self.channel.send(embed=disc_embed)
@@ -570,20 +566,13 @@ class WolfGameSession:
             for voter in list(self.alive):
                 view = WolfSelectView(self.alive, voter, "処刑するプレイヤーを選んでね...")
                 try:
-                    msg = await self.channel.send(
-                        f"⚖️ {voter.mention} さん、【処刑投票】本日処刑するプレイヤーを選んでください：",
-                        view=view
-                    )
+                    await voter.send("⚖️ **【処刑投票】**\n本日処刑するプレイヤーを下のメニューから選んでください：", view=view)
                 except Exception:
                     pass
                 
                 await view.wait()
                 if view.selected_target:
                     votes[voter] = view.selected_target
-                    try:
-                        await msg.delete()
-                    except:
-                        pass
                 else:
                     others = [p for p in self.alive if p != voter]
                     if others:
