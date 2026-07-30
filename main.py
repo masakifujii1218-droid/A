@@ -380,11 +380,6 @@ from discord.ext import commands
 import random
 import asyncio
 
-import discord
-from discord.ext import commands
-import random
-import asyncio
-
 # ==========================================
 # 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力版）
 # ==========================================
@@ -477,6 +472,7 @@ class WolfGameSession:
 
         while self.is_running:
             try:
+                # timeoutを指定しないことで無制限に待機します
                 msg = await self.bot.wait_for('message', check=check)
                 content = msg.content.strip()
                 for p in valid_targets:
@@ -491,17 +487,6 @@ class WolfGameSession:
         return None
 
     async def run_game_loop(self):
-        # ----------------------------------------------------
-        # 🔒 チケット関連等の別機能（sub.py）の自動停止処理
-        # ----------------------------------------------------
-        sub_cog = self.bot.get_cog("TicketCog") # sub.py側で定義されているCogクラス名に合わせて変更してください
-        if sub_cog:
-            try:
-                # Cog自体をアンロードして機能を一時停止する例
-                await self.bot.remove_cog("TicketCog")
-            except Exception:
-                pass
-
         # 役職を各プレイヤーのDMへ送信
         for p in self.players:
             role = self.roles[p]
@@ -516,65 +501,138 @@ class WolfGameSession:
             color=discord.Color.dark_purple()
         ))
 
-        try:
-            while self.is_running:
-                self.day_count += 1
+        while self.is_running:
+            self.day_count += 1
+            
+            # --- 🌙 夜のフェーズ ---
+            wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+            
+            night_embed = discord.Embed(
+                title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
+                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に相手のユーザーネームを入力してください。",
+                color=discord.Color.dark_purple()
+            )
+            await self.channel.send(embed=night_embed)
+
+            killed_target = None
+            valid_targets = [p for p in self.alive if self.roles[p] != "🐺 人狼"]
+            if not valid_targets:
+                valid_targets = self.alive
+
+            for wolf in wolves:
+                if wolf not in self.alive:
+                    continue
                 
-                # --- 🌙 夜のフェーズ ---
-                wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
-                
-                night_embed = discord.Embed(
-                    title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
-                    description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に相手のユーザーネームを入力してください。",
-                    color=discord.Color.dark_purple()
+                target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
+                prompt = (
+                    f"🐺 **【人狼の夜襲】**\n"
+                    f"今夜襲撃する相手の**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
+                    f"**【生存者一覧】**\n{target_list_str}"
                 )
-                await self.channel.send(embed=night_embed)
-
-                killed_target = None
-                valid_targets = [p for p in self.alive if self.roles[p] != "🐺 人狼"]
-                if not valid_targets:
-                    valid_targets = self.alive
-
-                for wolf in wolves:
-                    if wolf not in self.alive:
-                        continue
-                    
-                    target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
-                    prompt = (
-                        f"🐺 **【人狼の夜襲】**\n"
-                        f"今夜襲撃する相手の**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
-                        f"**【生存者一覧】**\n{target_list_str}"
-                    )
-                    
-                    target = await self.get_text_input(wolf, prompt, valid_targets)
-                    if not self.is_running: break
-                    
-                    if target:
-                        killed_target = target
-                        try:
-                            await wolf.send(f"✅ 【 **{target.display_name}** 】への襲撃を受け付けました。")
-                        except:
-                            pass
-                        break
-
+                
+                target = await self.get_text_input(wolf, prompt, valid_targets)
                 if not self.is_running: break
+                
+                if target:
+                    killed_target = target
+                    try:
+                        await wolf.send(f"✅ 【 **{target.display_name}** 】への襲撃を受け付けました。")
+                    except:
+                        pass
+                    break
 
-                if not killed_target and self.alive:
-                    killed_target = random.choice(valid_targets or self.alive)
+            if not self.is_running: break
 
-                # --- ☀️ 朝のフェーズ ---
-                if killed_target in self.alive:
-                    self.alive.remove(killed_target)
+            if not killed_target and self.alive:
+                killed_target = random.choice(valid_targets or self.alive)
 
-                morning_embed = discord.Embed(
-                    title=f"☀️ 第{self.day_count}日目 - 朝が来ました",
-                    description=f"昨夜の犠牲者が発見されました...\n\n惨たらしい姿で発見されたのは **{killed_target.mention}** さんでした。",
-                    color=discord.Color.orange()
+            # --- ☀️ 朝のフェーズ ---
+            if killed_target in self.alive:
+                self.alive.remove(killed_target)
+
+            morning_embed = discord.Embed(
+                title=f"☀️ 第{self.day_count}日目 - 朝が来ました",
+                description=f"昨夜の犠牲者が発見されました...\n\n惨たらしい姿で発見されたのは **{killed_target.mention}** さんでした。",
+                color=discord.Color.orange()
+            )
+            await self.channel.send(content=killed_target.mention, embed=morning_embed)
+
+            wolf_player = self.get_wolf_player()
+            alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+
+            if len(self.alive) == 2 and len(alive_wolves) == 1:
+                await self.channel.send(
+                    f"🐺 **人狼陣営の勝利！**\n"
+                    f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
+                    f"今回の人狼は **{wolf_player.mention}** でした！"
                 )
-                await self.channel.send(content=killed_target.mention, embed=morning_embed)
+                break
 
-                wolf_player = self.get_wolf_player()
+            if not alive_wolves:
+                await self.channel.send(
+                    f"🎉 **村人陣営の勝利！**\n"
+                    f"人狼が排除されました！\n"
+                    f"今回の人狼は **{wolf_player.mention}** でした！"
+                )
+                break
+
+            if not self.is_running: break
+
+            # --- 🗣️ 昼の議論 ＆ ⚖️ 投票フェーズ ---
+            disc_embed = discord.Embed(
+                title="🗣️ 昼の議論タイム",
+                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に各プレイヤーのDMに処刑投票用の案内が届きます）",
+                color=discord.Color.green()
+            )
+            await self.channel.send(embed=disc_embed)
+
+            votes = {}
+            for voter in list(self.alive):
+                valid_targets = [p for p in self.alive if p != voter]
+                target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
+                
+                prompt = (
+                    f"⚖️ **【処刑投票】**\n"
+                    f"本日処刑するプレイヤーの**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
+                    f"**【投票先候補】**\n{target_list_str}"
+                )
+                
+                target = await self.get_text_input(voter, prompt, valid_targets)
+                if not self.is_running: break
+                
+                if target:
+                    votes[voter] = target
+                    try:
+                        await voter.send(f"✅ 【 **{target.display_name}** 】への投票を受け付けました。")
+                    except:
+                        pass
+
+            if not self.is_running: break
+
+            if votes:
+                vote_counts = {}
+                for target in votes.values():
+                    vote_counts[target] = vote_counts.get(target, 0) + 1
+                
+                executed_target = max(vote_counts, key=vote_counts.get)
+                self.alive.remove(executed_target)
+
+                exec_embed = discord.Embed(
+                    title="⚖️ 処刑結果",
+                    description=f"村人たちの投票により、**{executed_target.mention}** さんが処刑されました。\n\n彼の正体は… 【 **{self.roles[executed_target]}** 】 でした！",
+                    color=discord.Color.red()
+                )
+                await self.channel.send(embed=exec_embed)
+
                 alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+
+                if not alive_wolves:
+                    await self.channel.send(
+                        f"🎉 **村人陣営の勝利！**\n"
+                        f"人狼を見つけ出して処刑しました！\n"
+                        f"今回の人狼は **{wolf_player.mention}** でした！"
+                    )
+                    break
 
                 if len(self.alive) == 2 and len(alive_wolves) == 1:
                     await self.channel.send(
@@ -583,94 +641,11 @@ class WolfGameSession:
                         f"今回の人狼は **{wolf_player.mention}** でした！"
                     )
                     break
+            else:
+                await self.channel.send("有効な投票がなかったため、本日の処刑は見送られました。")
 
-                if not alive_wolves:
-                    await self.channel.send(
-                        f"🎉 **村人陣営の勝利！**\n"
-                        f"人狼が排除されました！\n"
-                        f"今回の人狼は **{wolf_player.mention}** でした！"
-                    )
-                    break
-
-                if not self.is_running: break
-
-                # --- 🗣️ 昼の議論 ＆ ⚖️ 投票フェーズ ---
-                disc_embed = discord.Embed(
-                    title="🗣️ 昼の議論タイム",
-                    description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に各プレイヤーのDMに処刑投票用の案内が届きます）",
-                    color=discord.Color.green()
-                )
-                await self.channel.send(embed=disc_embed)
-
-                votes = {}
-                for voter in list(self.alive):
-                    valid_targets = [p for p in self.alive if p != voter]
-                    target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
-                    
-                    prompt = (
-                        f"⚖️ **【処刑投票】**\n"
-                        f"本日処刑するプレイヤーの**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
-                        f"**【投票先候補】**\n{target_list_str}"
-                    )
-                    
-                    target = await self.get_text_input(voter, prompt, valid_targets)
-                    if not self.is_running: break
-                    
-                    if target:
-                        votes[voter] = target
-                        try:
-                            await voter.send(f"✅ 【 **{target.display_name}** 】への投票を受け付けました。")
-                        except:
-                            pass
-
-                if not self.is_running: break
-
-                if votes:
-                    vote_counts = {}
-                    for target in votes.values():
-                        vote_counts[target] = vote_counts.get(target, 0) + 1
-                    
-                    executed_target = max(vote_counts, key=vote_counts.get)
-                    self.alive.remove(executed_target)
-
-                    exec_embed = discord.Embed(
-                        title="⚖️ 処刑結果",
-                        description=f"村人たちの投票により、**{executed_target.mention}** さんが処刑されました。\n\n彼の正体は… 【 **{self.roles[executed_target]}** 】 でした！",
-                        color=discord.Color.red()
-                    )
-                    await self.channel.send(embed=exec_embed)
-
-                    alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
-
-                    if not alive_wolves:
-                        await self.channel.send(
-                            f"🎉 **村人陣営の勝利！**\n"
-                            f"人狼を見つけ出して処刑しました！\n"
-                            f"今回の人狼は **{wolf_player.mention}** でした！"
-                        )
-                        break
-
-                    if len(self.alive) == 2 and len(alive_wolves) == 1:
-                        await self.channel.send(
-                            f"🐺 **人狼陣営の勝利！**\n"
-                            f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
-                            f"今回の人狼は **{wolf_player.mention}** でした！"
-                        )
-                        break
-                else:
-                    await self.channel.send("有効な投票がなかったため、本日の処刑は見送られました。")
-        
-        finally:
-            # ----------------------------------------------------
-            # 🔓 人狼ゲーム終了後（勝利確定・強制終了時）に sub.py を再開
-            # ----------------------------------------------------
-            try:
-                await self.bot.load_extension("sub") # sub.py を再読み込みして機能を復旧
-            except Exception:
-                pass
-
-            if self.channel.id in active_games:
-                del active_games[self.channel.id]
+        if self.channel.id in active_games:
+            del active_games[self.channel.id]
 
 @bot.tree.command(name="wolfgame", description="人狼ゲームの募集を開始します")
 async def wolfgame_command(interaction: discord.Interaction):
@@ -692,6 +667,7 @@ async def wolfend_command(interaction: discord.Interaction):
     session.is_running = False
     del active_games[interaction.channel.id]
     await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")
+
 # ==========================================
 # 🎮 ミニゲーム1: じゃんけん (/janken)
 # ==========================================
