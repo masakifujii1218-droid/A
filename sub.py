@@ -12,7 +12,7 @@ import random
 import json
 
 # ------------------------------------------
-# ボットインスタンスの定義（追加）
+# ボットインスタンスの定義
 # ------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,13 +25,12 @@ LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネ
 RATING_CHANNEL_ID = 1510639675239432313   # ★評価と改善点が届くチャンネル
 ADMIN_ROLE_ID = 1510405214811852900       # 運営・管理者ロールID
 
-VERSION = "v7.2.1 (Point Database Sync)"
+VERSION = "v7.2.2 (Point Database Sync & Close Fixed)"
 
 # --- ポイントシステム用設定 ---
-# 💡 指定していただいたデータベース用チャンネルIDを設定しました！
 POINT_DATABASE_CHANNEL_ID = 1527164312634920980  
-WORK_ROLE_ID = 1510021467155202057           # /work を実行できるロールID
-ADMIN_ROLE_ID_POINTS = 1510405214811852900    # 管理者ロールID
+WORK_ROLE_ID = 1510021467155202057           
+ADMIN_ROLE_ID_POINTS = 1510405214811852900    
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POINTS_FILE = os.path.join(BASE_DIR, "points.json")
@@ -53,18 +52,14 @@ async def sync_points_from_discord(bot: commands.Bot):
             print(f"【エラー】同期対象のチャンネルが見つかりません: {e}")
             return
 
-    # 一時的にデータをリセットして、古い順からログを追体験して再構築する
     temp_data = {}
     count = 0
 
-    # 過去のメッセージを古い順（oldest_first=True）に取得して解析
     async for message in channel.history(limit=5000, oldest_first=True):
-        # Bot自身の埋め込みメッセージのみを対象とする
         if message.author.id != bot.user.id or not message.embeds:
             continue
         
         embed = message.embeds[0]
-        # 変動通知（付与、消費、仕事など）を解析
         if embed.title and "ポイント変動通知" in embed.title:
             target_field = None
             change_field = None
@@ -79,7 +74,6 @@ async def sync_points_from_discord(bot: commands.Bot):
                     reason_field = field.value
 
             if target_field and change_field:
-                # ユーザーIDをクリーン（メンションや文字列から数字のみ抽出）
                 user_id_str = "".join(filter(str.isdigit, target_field))
                 try:
                     change_amount = int(change_field.replace(" pt", "").replace("+", "").replace(" ", ""))
@@ -89,10 +83,8 @@ async def sync_points_from_discord(bot: commands.Bot):
                 if user_id_str not in temp_data:
                     temp_data[user_id_str] = {"points": 0, "logs": []}
 
-                # ポイントを合算・計算
                 temp_data[user_id_str]["points"] += change_amount
                 
-                # 履歴用ログを復元
                 time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
                 sign = "+" if change_amount >= 0 else ""
                 emoji = "🪙" if change_amount >= 0 else "💸"
@@ -206,7 +198,7 @@ class StarRatingView(discord.ui.View):
 
 
 # ==========================================
-# 📜 DM用 ログ展開ボタン（!close実行時にユーザーのDMへ送信されます）
+# 📜 DM用 ログ展開ボタン
 # ==========================================
 class LogExportView(discord.ui.View):
     def __init__(self, full_log_text: str, channel_name: str):
@@ -223,88 +215,7 @@ class LogExportView(discord.ui.View):
         else:
             await interaction.response.send_message(f"**📜 チケット会話ログ ({self.channel_name})**\n```\n{self.full_log_text}\n```", ephemeral=True)
 
-# ==========================================
-# 🔒 !close コマンド（理由付き・自動ログ保存・DM通知＆評価送信）
-# ==========================================
-@bot.command(name="close")
-async def close_ticket(ctx, *, reason: str = "理由なし"):
-    ticket_channel = ctx.channel
-    channel_name = ticket_channel.name
 
-    # チャンネルの権限オーバーライドからチケット作成者（ユーザー）を特定
-    target_user = None
-    for target in ticket_channel.overwrites:
-        if isinstance(target, discord.Member) and target != ctx.bot.user:
-            target_user = target
-            break
-
-    # 1. チャンネルにクローズのお知らせを送信
-    close_notice_embed = discord.Embed(
-        title="🔒 チケットクローズのお知らせ",
-        description=f"このチケットは閉じられました。\n**理由:** {reason}",
-        color=discord.Color.red(),
-        timestamp=datetime.now()
-    )
-    await ticket_channel.send(embed=close_notice_embed)
-
-    # 2. チャンネルの履歴を読み取ってログを構築
-    log_lines = []
-    async for msg in ticket_channel.history(limit=100, oldest_first=True):
-        if msg.embeds:
-            for emb in msg.embeds:
-                author_name = emb.author.name if emb.author else "システム"
-                log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
-        elif msg.content:
-            log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
-
-    full_log_text = "\n".join(log_lines)
-
-    # 3. 管理用ログチャンネルへログを送信
-    log_channel = ctx.bot.get_channel(LOG_CHANNEL_ID)
-    if log_channel:
-        log_embed = discord.Embed(
-            title=f"🔒 チケットクローズログ: {channel_name}",
-            description=f"**対象ユーザー:** {target_user.mention if target_user else '不明'}\n**クローズ方式:** スタッフによるコマンド (`!close`)",
-            color=discord.Color.red(), timestamp=datetime.now()
-        )
-        if len(full_log_text) > 3000 or len(full_log_text) == 0:
-            with io.StringIO(full_log_text) as f:
-                file = discord.File(f, filename=f"log-{channel_name}.txt")
-                await log_channel.send(embed=log_embed, file=file)
-        else:
-            log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
-            await log_channel.send(embed=log_embed)
-
-    # 4. ユーザーのDMへクローズ連絡と「ログを展開する」ボタンを送信
-    if target_user:
-        try:
-            dm_embed = discord.Embed(
-                title="🔒 チケットがクローズされました",
-                description=f"サポートチケット `{channel_name}` が閉じられました。\n\n**クローズ理由:**\n{reason}",
-                color=discord.Color.orange(),
-                timestamp=datetime.now()
-            )
-            log_view = LogExportView(full_log_text=full_log_text, channel_name=channel_name)
-            await target_user.send(embed=dm_embed, view=log_view)
-        except Exception:
-            pass
-
-    # 5. 少し待ってからチャンネルを削除
-    await asyncio.sleep(2)
-    await ticket_channel.delete()
-
-    # 6. ユーザーへ評価案内（⭐0 〜 ⭐5）を送信
-    if target_user:
-        rating_embed = discord.Embed(
-            title="📝 問い合わせ評価のお願い",
-            description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
-            color=discord.Color.gold()
-        )
-        rating_view = StarRatingView(user_id=target_user.id)
-        try:
-            await target_user.send(embed=rating_embed, view=rating_view)
-        except Exception:
-            pass
 # ==========================================
 # スタッフ用：担当者登録用ボタン
 # ==========================================
@@ -345,30 +256,9 @@ class SupportClaimView(discord.ui.View):
 
 
 # ==========================================
-# modmail.py (Modmailシステム + クローズ機能)
+# Modmail イベント設定
 # ==========================================
-
-# 各種ID（必要に応じて変更してください）
-LOG_CHANNEL_ID = 1510042822533840936  # 管理用ログチャンネルID
-INBOX_CATEGORY_ID = 1513901626610553043 # チケット用カテゴリID
-ADMIN_ROLE_ID = 1510405214811852900     # スタッフロールID
-
-class LogExportView(discord.ui.View):
-    def __init__(self, full_log_text: str, channel_name: str):
-        super().__init__(timeout=None)
-        self.full_log_text = full_log_text
-        self.channel_name = channel_name
-
-    @discord.ui.button(label="📜 ログを展開する", style=discord.ButtonStyle.secondary, custom_id="export_log_btn")
-    async def export_log(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(self.full_log_text) > 3000 or len(self.full_log_text) == 0:
-            with io.StringIO(self.full_log_text) as f:
-                file = discord.File(f, filename=f"log-{self.channel_name}.txt")
-                await interaction.response.send_message("こちらがチケットの会話ログです。", file=file, ephemeral=True)
-        else:
-            await interaction.response.send_message(f"**📜 チケット会話ログ ({self.channel_name})**\n```\n{self.full_log_text}\n```", ephemeral=True)
-
-def setup_modmail_events(bot: commands.Bot, active_games_dict: dict):
+def setup_modmail_events(bot: commands.Bot, active_games_dict: dict = None):
 
     @bot.event
     async def on_message(message: discord.Message):
@@ -379,9 +269,6 @@ def setup_modmail_events(bot: commands.Bot, active_games_dict: dict):
         if isinstance(message.channel, discord.DMChannel):
             if not bot.guilds: return
             guild = bot.guilds[0]
-            
-            # 💡 人狼ゲーム中はサポートチケットが開かないようにブロック
-            # （ユーザーが参加している、またはアクティブなゲームセッションが存在する場合などを考慮）
             
             category = guild.get_channel(INBOX_CATEGORY_ID)
             if not category: return
@@ -425,10 +312,8 @@ def setup_modmail_events(bot: commands.Bot, active_games_dict: dict):
                 info_embed.add_field(name="🛡️ 所持ロール", value=roles_str or "なし", inline=False)
                 info_embed.add_field(name="💬 メッセージ", value=message.content, inline=False)
 
-                # 💡 SupportClaimView が定義されている前提
-                # view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
-                # await existing_channel.send(embed=info_embed, view=view)
-                await existing_channel.send(embed=info_embed)
+                view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
+                await existing_channel.send(embed=info_embed, view=view)
                 await message.add_reaction("✅")
                 return
 
@@ -459,120 +344,19 @@ def setup_modmail_events(bot: commands.Bot, active_games_dict: dict):
 
         await bot.process_commands(message)
 
-def setup_close_command(bot: commands.Bot):
-    @bot.command(name="close")
-    async def close_ticket(ctx, *, reason: str = "理由なし"):
-        ticket_channel = ctx.channel
-        channel_name = ticket_channel.name
-
-        target_user = None
-        for target in ticket_channel.overwrites:
-            if isinstance(target, discord.Member) and target != ctx.bot.user:
-                target_user = target
-                break
-
-        close_notice_embed = discord.Embed(
-            title="🔒 チケットクローズのお知らせ",
-            description=f"このチケットは閉じられました。\n**理由:** {reason}",
-            color=discord.Color.red(),
-            timestamp=datetime.now()
-        )
-        await ticket_channel.send(embed=close_notice_embed)
-
-        log_lines = []
-        async for msg in ticket_channel.history(limit=100, oldest_first=True):
-            if msg.embeds:
-                for emb in msg.embeds:
-                    author_name = emb.author.name if emb.author else "システム"
-                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
-            elif msg.content:
-                log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
-
-        full_log_text = "\n".join(log_lines)
-
-        log_channel = ctx.bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title=f"🔒 チケットクローズログ: {channel_name}",
-                description=f"**対象ユーザー:** {target_user.mention if target_user else '不明'}\n**クローズ方式:** スタッフによるコマンド (`!close`)",
-                color=discord.Color.red(), timestamp=datetime.now()
-            )
-            if len(full_log_text) > 3000 or len(full_log_text) == 0:
-                with io.StringIO(full_log_text) as f:
-                    file = discord.File(f, filename=f"log-{channel_name}.txt")
-                    await log_channel.send(embed=log_embed, file=file)
-            else:
-                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
-                await log_channel.send(embed=log_embed)
-
-        if target_user:
-            try:
-                dm_embed = discord.Embed(
-                    title="🔒 チケットがクローズされました",
-                    description=f"サポートチケット `{channel_name}` が閉じられました。\n\n**クローズ理由:**\n{reason}",
-                    color=discord.Color.orange(),
-                    timestamp=datetime.now()
-                )
-                log_view = LogExportView(full_log_text=full_log_text, channel_name=channel_name)
-                await target_user.send(embed=dm_embed, view=log_view)
-            except Exception:
-                pass
-
-        import asyncio
-        await asyncio.sleep(2)
-        await ticket_channel.delete()
 
 # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
 def setup_slash_commands(bot: commands.Bot):
-    # 最初はローカルを読み込む
     load_points()
-    
-    # 💡 非同期でDiscordチャンネルからデータを完全に同期（再起動対策）
     asyncio.create_task(sync_points_from_discord(bot))
-    
-    # メッセージイベントを設定
     setup_modmail_events(bot)
 
-    # --- /closereq コマンド ---
-    @bot.tree.command(name="closereq", description="ユーザーにクローズ確認リクエストを送信します")
-    async def close_request(interaction: discord.Interaction):
-        channel = interaction.channel
-        if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
-            await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
-            return
-        if not channel.topic or "User ID:" not in channel.topic:
-            await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
-            return
-
-        await interaction.response.defer()
-
-        try:
-            parts = channel.topic.split("|")
-            u_id = int(parts[0].replace("User ID:", "").strip())
-            user = await bot.fetch_user(u_id)
-        except:
-            await interaction.followup.send("❌ ユーザー情報を取得できませんでした。")
-            return
-
-        req_embed = discord.Embed(
-            title="🔒 問い合わせ終了の確認",
-            description=f"スタッフ（{interaction.user.mention}）より、この問い合わせを終了（クローズ）して良いかの確認が届きました。\n\n問題が解決し、チケットを閉じてよろしければ、下の**「閉じる」**ボタンを押してください。",
-            color=discord.Color.yellow()
-        )
-        view = CloseRequestConfirmView(
-            channel_id=channel.id, user_id=user.id, channel_name=channel.name, staff_mention=interaction.user.mention
-        )
-        try:
-            await user.send(embed=req_embed, view=view)
-            await interaction.followup.send(f"📬 {user.mention} のDMへクローズ確認リクエストを送信しました。")
-        except discord.Forbidden:
-            await interaction.followup.send("❌ ユーザーのDMが閉じられているため、リクエストを送信できませんでした。")
-
     # --- /close コマンド ---
-    @bot.tree.command(name="close", description="チケットを強制クローズします")
-    async def close_ticket(interaction: discord.Interaction):
+    @bot.tree.command(name="close", description="チケットをクローズします")
+    @app_commands.describe(reason="クローズする理由（任意）")
+    async def close_ticket(interaction: discord.Interaction, reason: str = "理由なし"):
         channel = interaction.channel
         if not channel.category or channel.category_id != INBOX_CATEGORY_ID:
             await interaction.response.send_message("❌ このチャンネルでは実行できません。", ephemeral=True)
@@ -581,7 +365,7 @@ def setup_slash_commands(bot: commands.Bot):
             await interaction.response.send_message("❌ トピックからユーザーIDが読み取れません。", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 強制クローズ処理中...")
+        await interaction.response.send_message("🔒 クローズ処理中...")
 
         try:
             parts = channel.topic.split("|")
@@ -604,7 +388,7 @@ def setup_slash_commands(bot: commands.Bot):
         if log_channel:
             log_embed = discord.Embed(
                 title=f"🔒 チケットクローズログ: {channel.name}",
-                description=f"**対象ユーザー:** {user.mention if user else channel.name}\n**クローズ実行者:** {interaction.user.mention} (強制クローズ)",
+                description=f"**対象ユーザー:** {user.mention if user else channel.name}\n**クローズ実行者:** {interaction.user.mention}\n**理由:** {reason}",
                 color=discord.Color.red(), timestamp=datetime.now()
             )
             if len(full_log_text) > 3000 or len(full_log_text) == 0:
@@ -617,7 +401,7 @@ def setup_slash_commands(bot: commands.Bot):
 
         if user:
             try:
-                end_embed = discord.Embed(title="🔒 問い合わせクローズ", description="運営スタッフによりチケットが閉じられました。", color=discord.Color.red())
+                end_embed = discord.Embed(title="🔒 問い合わせクローズ", description=f"運営スタッフによりチケットが閉じられました。\n**理由:** {reason}", color=discord.Color.red())
                 await user.send(end_embed)
 
                 rating_embed = discord.Embed(
@@ -656,12 +440,10 @@ def setup_slash_commands(bot: commands.Bot):
         reset_embed = discord.Embed(description="🔄 担当者がリセットされました。下のボタンを押して担当を交代してください。", color=discord.Color.yellow())
         await interaction.response.send_message(embed=reset_embed, view=new_view)
 
-
     # ==========================================
     # ポイントシステム スラッシュコマンド
     # ==========================================
 
-    # --- /work コマンド ---
     @bot.tree.command(name="work", description="毎日の仕事をこなしてポイントを獲得します")
     @app_commands.checks.cooldown(1, 28800, key=lambda i: i.user.id)
     async def work_command(interaction: discord.Interaction):
@@ -693,7 +475,6 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="現在の総保有", value=f"`{new_points} pt`")
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-        # 💡 同期用のポイントデータベースチャンネルに必ず解析可能なログを送る
         log_channel = interaction.client.get_channel(POINT_DATABASE_CHANNEL_ID)
         if log_channel:
             noti_embed = discord.Embed(title="📥 ポイント変動通知 (お仕事)", color=discord.Color.green(), timestamp=datetime.now())
@@ -719,7 +500,6 @@ def setup_slash_commands(bot: commands.Bot):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # --- /points コマンド ---
     @bot.tree.command(name="points", description="指定したユーザー（または自分）の保有ポイントを確認します")
     @app_commands.describe(user="ポイントを確認したいユーザーを指定（未指定で自分）")
     async def points_command(interaction: discord.Interaction, user: discord.User = None):
@@ -735,7 +515,6 @@ def setup_slash_commands(bot: commands.Bot):
         embed.add_field(name="ポイント残高", value=f"**{user_data['points']}** pt", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /pointlog コマンド ---
     @bot.tree.command(name="pointlog", description="ポイントの利用履歴（通帳）を最大100件確認します")
     @app_commands.describe(user="履歴を確認したいユーザーを指定（未指定で自分）")
     async def pointlog_command(interaction: discord.Interaction, user: discord.User = None):
@@ -767,13 +546,10 @@ def setup_slash_commands(bot: commands.Bot):
             embed.add_field(name="直近の履歴（最大100件）", value=f"```\n{full_log_text}\n```", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    # --- /rankings コマンド ---
     @bot.tree.command(name="rankings", description="ポイントの所持数ランキング上位10名を表示します")
     async def rankings_command(interaction: discord.Interaction):
-        # 全員に見える公開メッセージとして送信（ephemeral=False）
         await interaction.response.defer(ephemeral=False)
 
-        # 1ポイント以上のユーザーのみ抽出
         filtered_users = [
             (user_id, data) for user_id, data in points_data.items()
             if data.get("points", 0) >= 1
@@ -788,7 +564,6 @@ def setup_slash_commands(bot: commands.Bot):
             await interaction.followup.send(embed=embed)
             return
 
-        # ポイントが多い順にソート
         sorted_users = sorted(filtered_users, key=lambda item: item[1].get("points", 0), reverse=True)
         top_10 = sorted_users[:10]
 
@@ -822,7 +597,6 @@ def setup_slash_commands(bot: commands.Bot):
 
         await interaction.followup.send(embed=embed)
 
-    # --- /give_points コマンド ---
     @bot.tree.command(name="give_points", description="【管理者専用】他人のポイントを増やします")
     @app_commands.describe(user="付与する対象のユーザー", amount="増やすポイント数", reason="付与する理由・説明")
     async def give_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
@@ -856,7 +630,6 @@ def setup_slash_commands(bot: commands.Bot):
             noti_embed.add_field(name="理由", value=reason, inline=False)
             await log_channel.send(embed=noti_embed)
 
-    # --- /take_points コマンド ---
     @bot.tree.command(name="take_points", description="【管理者専用】他人のポイントを消費・減算します")
     @app_commands.describe(user="消費させる対象のユーザー", amount="減らすポイント数", reason="消費する理由・目的")
     async def take_points_command(interaction: discord.Interaction, user: discord.User, amount: int, reason: str):
