@@ -198,67 +198,105 @@ class StarRatingView(discord.ui.View):
 
 
 # ==========================================
-# [DM用] クローズ同意ボタン
+# 📜 DM用 ログ展開ボタン（!close実行時にユーザーのDMへ送信されます）
 # ==========================================
-class CloseRequestConfirmView(discord.ui.View):
-    def __init__(self, channel_id: int, user_id: int, channel_name: str, staff_mention: str):
+class LogExportView(discord.ui.View):
+    def __init__(self, full_log_text: str, channel_name: str):
         super().__init__(timeout=None)
-        self.channel_id = channel_id
-        self.user_id = user_id
+        self.full_log_text = full_log_text
         self.channel_name = channel_name
-        self.staff_mention = staff_mention
 
-    @discord.ui.button(label="🔒 閉じる", style=discord.ButtonStyle.danger, custom_id="user_confirm_close")
-    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        bot = interaction.client
-        ticket_channel = bot.get_channel(self.channel_id)
-        
-        button.disabled = True
-        button.label = "クローズされました"
-        await interaction.message.edit(view=self)
-        await interaction.response.defer()
+    @discord.ui.button(label="📜 ログを展開する", style=discord.ButtonStyle.secondary, custom_id="export_log_btn")
+    async def export_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(self.full_log_text) > 3000 or len(self.full_log_text) == 0:
+            with io.StringIO(self.full_log_text) as f:
+                file = discord.File(f, filename=f"log-{self.channel_name}.txt")
+                await interaction.response.send_message("こちらがチケットの会話ログです。", file=file, ephemeral=True)
+        else:
+            await interaction.response.send_message(f"**📜 チケット会話ログ ({self.channel_name})**\n```\n{self.full_log_text}\n```", ephemeral=True)
 
-        log_lines = []
-        if ticket_channel:
-            await ticket_channel.send("🔒 ユーザーがクローズを承諾しました。ログをエクスポート中...")
-            async for msg in ticket_channel.history(limit=100, oldest_first=True):
-                if msg.embeds:
-                    for emb in msg.embeds:
-                        author_name = emb.author.name if emb.author else "システム"
-                        log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
-                elif msg.content:
-                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+# ==========================================
+# 🔒 !close コマンド（理由付き・自動ログ保存・DM通知＆評価送信）
+# ==========================================
+@bot.command(name="close")
+async def close_ticket(ctx, *, reason: str = "理由なし"):
+    ticket_channel = ctx.channel
+    channel_name = ticket_channel.name
 
-        full_log_text = "\n".join(log_lines)
+    # チャンネルの権限オーバーライドからチケット作成者（ユーザー）を特定
+    target_user = None
+    for target in ticket_channel.overwrites:
+        if isinstance(target, discord.Member) and target != ctx.bot.user:
+            target_user = target
+            break
 
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            log_embed = discord.Embed(
-                title=f"🔒 チケットクローズログ: {self.channel_name}",
-                description=f"**対象ユーザー:** <@{self.user_id}>\n**クローズ方式:** ユーザー同意によるクローズ (`/closereq`)",
-                color=discord.Color.red(), timestamp=datetime.now()
+    # 1. チャンネルにクローズのお知らせを送信
+    close_notice_embed = discord.Embed(
+        title="🔒 チケットクローズのお知らせ",
+        description=f"このチケットは閉じられました。\n**理由:** {reason}",
+        color=discord.Color.red(),
+        timestamp=datetime.now()
+    )
+    await ticket_channel.send(embed=close_notice_embed)
+
+    # 2. チャンネルの履歴を読み取ってログを構築
+    log_lines = []
+    async for msg in ticket_channel.history(limit=100, oldest_first=True):
+        if msg.embeds:
+            for emb in msg.embeds:
+                author_name = emb.author.name if emb.author else "システム"
+                log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
+        elif msg.content:
+            log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+
+    full_log_text = "\n".join(log_lines)
+
+    # 3. 管理用ログチャンネルへログを送信
+    log_channel = ctx.bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(
+            title=f"🔒 チケットクローズログ: {channel_name}",
+            description=f"**対象ユーザー:** {target_user.mention if target_user else '不明'}\n**クローズ方式:** スタッフによるコマンド (`!close`)",
+            color=discord.Color.red(), timestamp=datetime.now()
+        )
+        if len(full_log_text) > 3000 or len(full_log_text) == 0:
+            with io.StringIO(full_log_text) as f:
+                file = discord.File(f, filename=f"log-{channel_name}.txt")
+                await log_channel.send(embed=log_embed, file=file)
+        else:
+            log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
+            await log_channel.send(embed=log_embed)
+
+    # 4. ユーザーのDMへクローズ連絡と「ログを展開する」ボタンを送信
+    if target_user:
+        try:
+            dm_embed = discord.Embed(
+                title="🔒 チケットがクローズされました",
+                description=f"サポートチケット `{channel_name}` が閉じられました。\n\n**クローズ理由:**\n{reason}",
+                color=discord.Color.orange(),
+                timestamp=datetime.now()
             )
-            if len(full_log_text) > 3000 or len(full_log_text) == 0:
-                with io.StringIO(full_log_text) as f:
-                    file = discord.File(f, filename=f"log-{self.channel_name}.txt")
-                    await log_channel.send(embed=log_embed, file=file)
-            else:
-                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
-                await log_channel.send(embed=log_embed)
+            log_view = LogExportView(full_log_text=full_log_text, channel_name=channel_name)
+            await target_user.send(embed=dm_embed, view=log_view)
+        except Exception:
+            pass
 
-        if ticket_channel:
-            await asyncio.sleep(2)
-            await ticket_channel.delete()
+    # 5. 少し待ってからチャンネルを削除
+    await asyncio.sleep(2)
+    await ticket_channel.delete()
 
+    # 6. ユーザーへ評価案内（⭐0 〜 ⭐5）を送信
+    if target_user:
         rating_embed = discord.Embed(
             title="📝 問い合わせ評価のお願い",
             description="今回のサポート対応はいかがでしたでしょうか？\n下のボタンから **⭐0 〜 ⭐5** の評価をお選びください。",
             color=discord.Color.gold()
         )
-        rating_view = StarRatingView(user_id=self.user_id)
-        await interaction.followup.send(embed=rating_embed, view=rating_view)
-
-
+        rating_view = StarRatingView(user_id=target_user.id)
+        try:
+            await target_user.send(embed=rating_embed, view=rating_view)
+        except Exception:
+            pass
 # ==========================================
 # スタッフ用：担当者登録用ボタン
 # ==========================================
