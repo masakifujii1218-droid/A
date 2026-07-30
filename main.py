@@ -370,39 +370,15 @@ class QuizView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 
+import discord
+from discord.ext import commands
+import random
+import asyncio
+
 # ==========================================
-# 🐺 人狼ゲーム システム（DM完全対応版）
+# 🐺 人狼ゲーム システム（DMテキスト入力版）
 # ==========================================
 active_games = {} # { channel_id: GameSession }
-
-class WolfSelect(discord.ui.Select):
-    def __init__(self, alive_players, voter, placeholder_text):
-        self.voter = voter
-        options = [
-            discord.SelectOption(label=p.display_name, value=str(p.id))
-            for p in alive_players if p != voter
-        ]
-        if not options:
-            options.append(discord.SelectOption(label="対象なし", value="none"))
-        super().__init__(placeholder=placeholder_text, min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user != self.voter:
-            await interaction.response.send_message("これはあなた用の選択肢ではありません！", ephemeral=True)
-            return
-        
-        target_id = self.values[0]
-        target = interaction.guild.get_member(int(target_id)) if target_id != "none" else None
-        
-        self.view.selected_target = target
-        await interaction.response.edit_message(content=f"✅ 【 **{target.display_name if target else 'なし'}** 】への選択を受け付けました。", view=None)
-        self.view.stop()
-
-class WolfSelectView(discord.ui.View):
-    def __init__(self, alive_players, voter, placeholder_text):
-        super().__init__(timeout=30.0)
-        self.selected_target = None
-        self.add_item(WolfSelect(alive_players, voter, placeholder_text))
 
 class WolfLobbyView(discord.ui.View):
     def __init__(self, host):
@@ -445,15 +421,16 @@ class WolfLobbyView(discord.ui.View):
         await interaction.response.edit_message(embed=start_embed, view=self)
         self.stop()
 
-        session = WolfGameSession(interaction.channel, self.joined, self.host)
+        session = WolfGameSession(interaction.channel, self.joined, self.host, interaction.client)
         active_games[interaction.channel.id] = session
         asyncio.create_task(session.run_game_loop())
 
 class WolfGameSession:
-    def __init__(self, channel, players, host):
+    def __init__(self, channel, players, host, bot):
         self.channel = channel
         self.players = players
         self.host = host
+        self.bot = bot
         self.is_running = True
         
         roles_list = ["🐺 人狼"] + ["🧑‍🌾 村人"] * (len(players) - 1)
@@ -466,6 +443,43 @@ class WolfGameSession:
         for p, role in self.roles.items():
             if role == "🐺 人狼":
                 return p
+        return None
+
+    async def get_text_input(self, user, prompt_text, valid_targets):
+        """DMでメッセージ入力を受け付け、有効な対象プレイヤーを返す（30秒タイムアウト）"""
+        try:
+            await user.send(prompt_text)
+        except Exception:
+            return None
+
+        def check(m):
+            if m.author != user or not isinstance(m.channel, discord.DMChannel):
+                return False
+            content = m.content.strip()
+            for p in valid_targets:
+                if (content == p.name or 
+                    content == p.global_name or 
+                    content == p.display_name or 
+                    content == f"<@{p.id}>" or 
+                    content == str(p.id)):
+                    return True
+            return False
+
+        try:
+            msg = await self.bot.wait_for('message', timeout=30.0, check=check)
+            content = msg.content.strip()
+            for p in valid_targets:
+                if (content == p.name or 
+                    content == p.global_name or 
+                    content == p.display_name or 
+                    content == f"<@{p.id}>" or 
+                    content == str(p.id)):
+                    return p
+        except asyncio.TimeoutError:
+            try:
+                await user.send("⏰ 制限時間内に有効な名前が入力されなかったため、応答がありませんでした。")
+            except:
+                pass
         return None
 
     async def run_game_loop(self):
@@ -491,34 +505,43 @@ class WolfGameSession:
             
             night_embed = discord.Embed(
                 title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
-                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に届くメニューから選択してください。",
+                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に相手のユーザーネームを入力してください。",
                 color=discord.Color.dark_purple()
             )
             await self.channel.send(embed=night_embed)
 
             killed_target = None
+            valid_targets = [p for p in self.alive if self.roles[p] != "🐺 人狼"]
+            if not valid_targets:
+                valid_targets = self.alive
+
             for wolf in wolves:
                 if wolf not in self.alive:
                     continue
                 
-                view = WolfSelectView(self.alive, wolf, "今夜襲撃する相手を選んでね...")
-                try:
-                    await wolf.send("🐺 **【人狼の夜襲】**\n今夜襲撃する相手を下のメニューから選んでください：", view=view)
-                except Exception:
-                    await self.channel.send(f"{wolf.mention} さんのDMへの送信に失敗しました。", delete_after=10)
-                    continue
+                target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
+                prompt = (
+                    f"🐺 **【人狼の夜襲】**\n"
+                    f"今夜襲撃する相手の**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
+                    f"**【生存者一覧】**\n{target_list_str}"
+                )
                 
-                await view.wait()
-                if view.selected_target:
-                    killed_target = view.selected_target
+                target = await self.get_text_input(wolf, prompt, valid_targets)
+                if target:
+                    killed_target = target
                     try:
-                        await wolf.send(f"✅ 【 **{killed_target.display_name}** 】への襲撃を受け付けました。")
+                        await wolf.send(f"✅ 【 **{target.display_name}** 】への襲撃を受け付けました。")
                     except:
                         pass
                     break
+                else:
+                    try:
+                        await wolf.send("❌ タイムアウトまたは無効な入力のため、襲撃対象を受け付けられませんでした。")
+                    except:
+                        pass
 
             if not killed_target and self.alive:
-                killed_target = random.choice([p for p in self.alive if self.roles[p] != "🐺 人狼"] or self.alive)
+                killed_target = random.choice(valid_targets or self.alive)
 
             if not self.is_running: break
 
@@ -557,26 +580,36 @@ class WolfGameSession:
             # --- 🗣️ 昼の議論 ＆ ⚖️ 投票フェーズ ---
             disc_embed = discord.Embed(
                 title="🗣️ 昼の議論タイム",
-                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に各プレイヤーのDMに処刑投票用のメニューが届きます）",
+                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に各プレイヤーのDMに処刑投票用の案内が届きます）",
                 color=discord.Color.green()
             )
             await self.channel.send(embed=disc_embed)
 
             votes = {}
             for voter in list(self.alive):
-                view = WolfSelectView(self.alive, voter, "処刑するプレイヤーを選んでね...")
-                try:
-                    await voter.send("⚖️ **【処刑投票】**\n本日処刑するプレイヤーを下のメニューから選んでください：", view=view)
-                except Exception:
-                    pass
+                valid_targets = [p for p in self.alive if p != voter]
+                target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in valid_targets])
                 
-                await view.wait()
-                if view.selected_target:
-                    votes[voter] = view.selected_target
+                prompt = (
+                    f"⚖️ **【処刑投票】**\n"
+                    f"本日処刑するプレイヤーの**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
+                    f"**【投票先候補】**\n{target_list_str}"
+                )
+                
+                target = await self.get_text_input(voter, prompt, valid_targets)
+                if target:
+                    votes[voter] = target
+                    try:
+                        await voter.send(f"✅ 【 **{target.display_name}** 】への投票を受け付けました。")
+                    except:
+                        pass
                 else:
-                    others = [p for p in self.alive if p != voter]
-                    if others:
-                        votes[voter] = random.choice(others)
+                    if valid_targets:
+                        votes[voter] = random.choice(valid_targets)
+                        try:
+                            await voter.send(f"⚠️ 応答がなかったため、ランダムに投票されました。")
+                        except:
+                            pass
 
             if not self.is_running: break
 
