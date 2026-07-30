@@ -592,22 +592,18 @@ def setup_quiz_commands(bot: commands.Bot):
         )
         await ctx.send(embed=embed, view=CloseConfirmView())
 
-    @bot.command(name="sendmessage")
-    async def send_message_cmd(ctx: commands.Context, channel_id: int, *, message: str):
-        if not is_admin_role_or_higher(ctx.author):
-            await ctx.send("❌ このコマンドを実行する権限がありません。")
-            return
-        
-        target_channel = bot.get_channel(channel_id)
-        if target_channel is None:
-            try:
-                target_channel = await bot.fetch_channel(channel_id)
-            except Exception as e:
-                await ctx.send(f"❌ 指定されたチャンネルの取得に失敗しました: {e}")
-                return
+   @bot.command(name="sendmessage")
+async def send_message_cmd(ctx, channel: discord.TextChannel, *, message: str):
+    # 権限チェック (既存の ADMIN_ADMIN_ROLE_IDS や権限ロジックに合わせて調整)
+    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+    has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
 
-        try:
-            await target_channel.send(message)
-            await ctx.send(f"✅ {target_channel.mention} にメッセージを送信しました。")
-        except Exception as e:
-            await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
+    if not has_permission:
+        await ctx.send("❌ このコマンドを実行する権限がありません。")
+        return
+
+    try:
+        await channel.send(message)
+        await ctx.send(f"✅ {channel.mention} にメッセージを送信しました。")
+    except Exception as e:
+        await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
