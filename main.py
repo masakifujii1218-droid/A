@@ -62,10 +62,8 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 管理者として許可するロールのIDをここに指定します（実際のロールIDに書き換えてください）
-ADMIN_ROLE_IDS = [1510405214811852900]
-
-setup_quiz_commands(bot, ADMIN_ROLE_IDS)
+# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録
+setup_quiz_commands(bot)
 
 # ==========================================
 # JSON 永続化データ管理
@@ -371,14 +369,20 @@ class QuizView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
-# ==========================================
-# 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力・人狼2人対応版）
-# ==========================================
 
 import discord
 from discord.ext import commands
 import random
 import asyncio
+
+import discord
+from discord.ext import commands
+import random
+import asyncio
+
+# ==========================================
+# 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力・人狼2人対応版）
+# ==========================================
 
 active_games = {} # { channel_id: GameSession }
 REQUIRED_ROLE_ID = 1510405214811852900
@@ -496,26 +500,6 @@ class WolfLobbyView(discord.ui.View):
             session = WolfGameSession(interaction.channel, self.joined, self.host, interaction.client, wolf_count=1)
             active_games[interaction.channel.id] = session
             asyncio.create_task(session.run_game_loop())
-
-    @discord.ui.button(label="遊び方", style=discord.ButtonStyle.secondary, custom_id="wolf_help")
-    async def help_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        help_text = (
-            "**募集と開始 (/wolfgame)**\n"
-            "チャンネルでコマンドを実行するとロビーが作成され、「参加する」ボタンを押したプレイヤーが参加します。\n"
-            "ホストが「スタート」ボタンを押すと、全員の DM（ダイレクトメッセージ） に自分の役職が通知されます。\n\n"
-            "**夜のフェーズ (Night)**\n"
-            "村に夜が訪れ、人狼には誰を襲撃するかをDMで入力してもらいます。\n"
-            "人狼は、生存者の中から襲撃したい相手のユーザーネームや表示名を入力します。\n\n"
-            "**朝のフェーズ (Morning)**\n"
-            "犠牲者（人狼に襲われたプレイヤー）がチャンネルで発表され、その人はゲームから脱落（死亡）します。\n"
-            "この時点で「人狼の数が生存者の過半数・同数になった場合」は人狼陣営の勝利でゲーム終了です。\n\n"
-            "**昼の議論 ＆ 処刑投票フェーズ (Day & Vote)**\n"
-            "生存者全員で、誰が人狼かチャンネルで自由に話し合います（推理タイム）。\n"
-            "その後、各プレイヤーのDMに投票用の案内が届くので、本日処刑したいプレイヤーの名前をDMに入力します。\n"
-            "最も票を集めたプレイヤーが処刑され、正体（役職）が全員に明かされます。\n"
-            "処刑されたのが人狼であれば村人の勝利、まだ人狼が残っていれば再び夜のフェーズへ戻ります。"
-        )
-        await interaction.response.send_message(help_text, ephemeral=True)
 
 
 class WolfGameSession:
@@ -777,8 +761,7 @@ def setup_wolf_commands(bot: commands.Bot):
         session.is_running = False
         if interaction.channel.id in active_games:
             del active_games[interaction.channel.id]
-        await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")
-# ==========================================
+        await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")# ==========================================
 # 🎮 ミニゲーム1: じゃんけん (/janken)
 # ==========================================
 class JankenView(discord.ui.View):
