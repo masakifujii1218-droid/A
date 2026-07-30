@@ -371,10 +371,14 @@ class QuizView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
-
 # ==========================================
 # 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力・人狼2人対応版）
 # ==========================================
+
+import discord
+from discord.ext import commands
+import random
+import asyncio
 
 active_games = {} # { channel_id: GameSession }
 REQUIRED_ROLE_ID = 1510405214811852900
