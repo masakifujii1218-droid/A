@@ -375,8 +375,13 @@ from discord.ext import commands
 import random
 import asyncio
 
+import discord
+from discord.ext import commands
+import random
+import asyncio
+
 # ==========================================
-# 🐺 人狼ゲーム システム（DMテキスト入力版）
+# 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力版）
 # ==========================================
 active_games = {} # { channel_id: GameSession }
 
@@ -446,7 +451,7 @@ class WolfGameSession:
         return None
 
     async def get_text_input(self, user, prompt_text, valid_targets):
-        """DMでメッセージ入力を受け付け、有効な対象プレイヤーを返す（30秒タイムアウト）"""
+        """DMでメッセージ入力を受け付け、有効な対象プレイヤーを返す（制限時間なし）"""
         try:
             await user.send(prompt_text)
         except Exception:
@@ -465,21 +470,20 @@ class WolfGameSession:
                     return True
             return False
 
-        try:
-            msg = await self.bot.wait_for('message', timeout=30.0, check=check)
-            content = msg.content.strip()
-            for p in valid_targets:
-                if (content == p.name or 
-                    content == p.global_name or 
-                    content == p.display_name or 
-                    content == f"<@{p.id}>" or 
-                    content == str(p.id)):
-                    return p
-        except asyncio.TimeoutError:
+        while self.is_running:
             try:
-                await user.send("⏰ 制限時間内に有効な名前が入力されなかったため、応答がありませんでした。")
-            except:
-                pass
+                # timeoutを指定しないことで無制限に待機します
+                msg = await self.bot.wait_for('message', check=check)
+                content = msg.content.strip()
+                for p in valid_targets:
+                    if (content == p.name or 
+                        content == p.global_name or 
+                        content == p.display_name or 
+                        content == f"<@{p.id}>" or 
+                        content == str(p.id)):
+                        return p
+            except Exception:
+                break
         return None
 
     async def run_game_loop(self):
@@ -527,6 +531,8 @@ class WolfGameSession:
                 )
                 
                 target = await self.get_text_input(wolf, prompt, valid_targets)
+                if not self.is_running: break
+                
                 if target:
                     killed_target = target
                     try:
@@ -534,16 +540,11 @@ class WolfGameSession:
                     except:
                         pass
                     break
-                else:
-                    try:
-                        await wolf.send("❌ タイムアウトまたは無効な入力のため、襲撃対象を受け付けられませんでした。")
-                    except:
-                        pass
+
+            if not self.is_running: break
 
             if not killed_target and self.alive:
                 killed_target = random.choice(valid_targets or self.alive)
-
-            if not self.is_running: break
 
             # --- ☀️ 朝のフェーズ ---
             if killed_target in self.alive:
@@ -597,19 +598,14 @@ class WolfGameSession:
                 )
                 
                 target = await self.get_text_input(voter, prompt, valid_targets)
+                if not self.is_running: break
+                
                 if target:
                     votes[voter] = target
                     try:
                         await voter.send(f"✅ 【 **{target.display_name}** 】への投票を受け付けました。")
                     except:
                         pass
-                else:
-                    if valid_targets:
-                        votes[voter] = random.choice(valid_targets)
-                        try:
-                            await voter.send(f"⚠️ 応答がなかったため、ランダムに投票されました。")
-                        except:
-                            pass
 
             if not self.is_running: break
 
