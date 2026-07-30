@@ -11,6 +11,14 @@ import os
 import random
 import json
 
+# ------------------------------------------
+# ボットインスタンスの定義（追加）
+# ------------------------------------------
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 # --- 固定設定 ---
 INBOX_CATEGORY_ID = 1513901626610553043   # 問い合わせが入るカテゴリー
 LOG_CHANNEL_ID = 1510042822533840936      # ログが送信されるチャンネル
