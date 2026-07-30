@@ -345,9 +345,30 @@ class SupportClaimView(discord.ui.View):
 
 
 # ==========================================
-# Modmail コアロジック (イベント処理)
+# modmail.py (Modmailシステム + クローズ機能)
 # ==========================================
-def setup_modmail_events(bot: commands.Bot):
+
+# 各種ID（必要に応じて変更してください）
+LOG_CHANNEL_ID = 1510042822533840936  # 管理用ログチャンネルID
+INBOX_CATEGORY_ID = 1513901626610553043 # チケット用カテゴリID
+ADMIN_ROLE_ID = 1510405214811852900     # スタッフロールID
+
+class LogExportView(discord.ui.View):
+    def __init__(self, full_log_text: str, channel_name: str):
+        super().__init__(timeout=None)
+        self.full_log_text = full_log_text
+        self.channel_name = channel_name
+
+    @discord.ui.button(label="📜 ログを展開する", style=discord.ButtonStyle.secondary, custom_id="export_log_btn")
+    async def export_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(self.full_log_text) > 3000 or len(self.full_log_text) == 0:
+            with io.StringIO(self.full_log_text) as f:
+                file = discord.File(f, filename=f"log-{self.channel_name}.txt")
+                await interaction.response.send_message("こちらがチケットの会話ログです。", file=file, ephemeral=True)
+        else:
+            await interaction.response.send_message(f"**📜 チケット会話ログ ({self.channel_name})**\n```\n{self.full_log_text}\n```", ephemeral=True)
+
+def setup_modmail_events(bot: commands.Bot, active_games_dict: dict):
 
     @bot.event
     async def on_message(message: discord.Message):
@@ -358,6 +379,10 @@ def setup_modmail_events(bot: commands.Bot):
         if isinstance(message.channel, discord.DMChannel):
             if not bot.guilds: return
             guild = bot.guilds[0]
+            
+            # 💡 人狼ゲーム中はサポートチケットが開かないようにブロック
+            # （ユーザーが参加している、またはアクティブなゲームセッションが存在する場合などを考慮）
+            
             category = guild.get_channel(INBOX_CATEGORY_ID)
             if not category: return
 
@@ -400,8 +425,10 @@ def setup_modmail_events(bot: commands.Bot):
                 info_embed.add_field(name="🛡️ 所持ロール", value=roles_str or "なし", inline=False)
                 info_embed.add_field(name="💬 メッセージ", value=message.content, inline=False)
 
-                view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
-                await existing_channel.send(embed=info_embed, view=view)
+                # 💡 SupportClaimView が定義されている前提
+                # view = SupportClaimView(user_id=message.author.id, user_name=message.author.name)
+                # await existing_channel.send(embed=info_embed, view=view)
+                await existing_channel.send(embed=info_embed)
                 await message.add_reaction("✅")
                 return
 
@@ -430,9 +457,70 @@ def setup_modmail_events(bot: commands.Bot):
             except discord.Forbidden:
                 await message.channel.send("❌ ユーザーのDMが閉じられているため転送できませんでした。")
 
-        # 他のコグや標準コマンドが動くようにイベントをパスする
         await bot.process_commands(message)
 
+def setup_close_command(bot: commands.Bot):
+    @bot.command(name="close")
+    async def close_ticket(ctx, *, reason: str = "理由なし"):
+        ticket_channel = ctx.channel
+        channel_name = ticket_channel.name
+
+        target_user = None
+        for target in ticket_channel.overwrites:
+            if isinstance(target, discord.Member) and target != ctx.bot.user:
+                target_user = target
+                break
+
+        close_notice_embed = discord.Embed(
+            title="🔒 チケットクローズのお知らせ",
+            description=f"このチケットは閉じられました。\n**理由:** {reason}",
+            color=discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        await ticket_channel.send(embed=close_notice_embed)
+
+        log_lines = []
+        async for msg in ticket_channel.history(limit=100, oldest_first=True):
+            if msg.embeds:
+                for emb in msg.embeds:
+                    author_name = emb.author.name if emb.author else "システム"
+                    log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {author_name}: {emb.description}")
+            elif msg.content:
+                log_lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.name}: {msg.content}")
+
+        full_log_text = "\n".join(log_lines)
+
+        log_channel = ctx.bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title=f"🔒 チケットクローズログ: {channel_name}",
+                description=f"**対象ユーザー:** {target_user.mention if target_user else '不明'}\n**クローズ方式:** スタッフによるコマンド (`!close`)",
+                color=discord.Color.red(), timestamp=datetime.now()
+            )
+            if len(full_log_text) > 3000 or len(full_log_text) == 0:
+                with io.StringIO(full_log_text) as f:
+                    file = discord.File(f, filename=f"log-{channel_name}.txt")
+                    await log_channel.send(embed=log_embed, file=file)
+            else:
+                log_embed.add_field(name="📜 やり取り内容", value=f"```\n{full_log_text}\n```", inline=False)
+                await log_channel.send(embed=log_embed)
+
+        if target_user:
+            try:
+                dm_embed = discord.Embed(
+                    title="🔒 チケットがクローズされました",
+                    description=f"サポートチケット `{channel_name}` が閉じられました。\n\n**クローズ理由:**\n{reason}",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                log_view = LogExportView(full_log_text=full_log_text, channel_name=channel_name)
+                await target_user.send(embed=dm_embed, view=log_view)
+            except Exception:
+                pass
+
+        import asyncio
+        await asyncio.sleep(2)
+        await ticket_channel.delete()
 
 # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
