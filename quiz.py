@@ -34,7 +34,7 @@ def is_admin_role_or_higher(user: discord.Member) -> bool:
     """指定ロール(ADMIN_ROLE_ID)か、それより上位の位置にあるロールを持っているか判定"""
     if not isinstance(user, discord.Member):
         return False
-    
+     
     if user.guild.owner_id == user.id:
         return True
 
@@ -71,7 +71,7 @@ async def save_config_to_discord(bot: commands.Bot):
                 return
             except discord.NotFound:
                 pass
-        
+         
         msg = await channel.send(content=content)
         config_message_id = msg.id
     except Exception as e:
@@ -89,7 +89,7 @@ async def load_config_from_discord(bot: commands.Bot):
             if msg.author.id == bot.user.id and msg.content.startswith("```json"):
                 json_str = msg.content.strip("`").replace("json\n", "").strip()
                 loaded_data = json.loads(json_str)
-                
+                 
                 if isinstance(loaded_data, dict) and "departments" in loaded_data:
                     quiz_config.clear()
                     quiz_config.update(loaded_data)
@@ -103,10 +103,10 @@ def generate_admin_embed():
         title="⚙️ 自己推薦 システム管理者パネル",
         color=discord.Color.gold()
     )
-    
+     
     dept_text = "【現在の部署一覧】\n"
     departments = quiz_config.get("departments", {})
-    
+     
     if not departments:
         dept_text += "現在登録されている部署はありません。\n"
     else:
@@ -114,7 +114,7 @@ def generate_admin_embed():
             status = "🟢" if data.get("is_open", True) else "🔴"
             q_count = len(data.get("questions", []))
             dept_text += f"・{dept}: {status} (質問{q_count}個)\n"
-            
+             
     dept_text += "\n下のボタンから部署の追加・削除・質問設定・ON/OFF切替が行えます。"
     embed.description = dept_text
     return embed
@@ -245,7 +245,7 @@ class ReadyCheckView(discord.ui.View):
             await interaction.edit_original_response(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
         except Exception:
             pass
-        
+         
         applicant = self.applicant or interaction.user
         questions = self.questions
         if not questions and self.dept_name:
@@ -259,10 +259,10 @@ class QuizUserPanelSelect(discord.ui.Select):
         for dept, data in quiz_config.get("departments", {}).items():
             desc = "🟢 受付中" if data.get("is_open", True) else "🔴 停止中"
             options.append(discord.SelectOption(label=dept, description=desc, value=dept))
-            
+             
         if not options:
             options.append(discord.SelectOption(label="現在募集中の部署はありません", value="none"))
-            
+             
         super().__init__(placeholder="応募する部署を選択してください...", min_values=1, max_values=1, options=options, custom_id="quiz_user_select_persistent")
 
     async def callback(self, interaction: discord.Interaction):
@@ -339,10 +339,10 @@ class AddDeptModal(discord.ui.Modal, title="新しい部署の追加"):
         if name in quiz_config.get("departments", {}):
             await interaction.followup.send("⚠️ その部署は既に存在します。", ephemeral=True)
             return
-            
+         
         if "departments" not in quiz_config:
             quiz_config["departments"] = {}
-            
+         
         quiz_config["departments"][name] = {"is_open": True, "questions": []}
         await save_config_to_discord(self.bot_ref)
         try:
@@ -387,7 +387,7 @@ class AddQuestionsModal(discord.ui.Modal):
             await self.admin_msg.edit(embed=generate_admin_embed())
         except discord.NotFound:
             pass
-            
+             
         await interaction.followup.send(f"✅ 「{self.dept_name}」に **{added_count}問** の質問を追加しました！", ephemeral=True)
 
 class SelectDeptView(discord.ui.View):
@@ -396,11 +396,11 @@ class SelectDeptView(discord.ui.View):
         self.action = action
         self.admin_msg = admin_msg
         self.bot_ref = bot_ref
-        
+         
         options = [discord.SelectOption(label=d, value=d) for d in quiz_config.get("departments", {}).keys()]
         if not options:
             options.append(discord.SelectOption(label="部署がありません", value="none"))
-            
+             
         select = discord.ui.Select(placeholder="対象の部署を選択してください...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
@@ -410,7 +410,7 @@ class SelectDeptView(discord.ui.View):
         if dept == "none":
             await interaction.response.edit_message(content="部署が存在しません。", view=None)
             return
-        
+         
         if self.action == "delete":
             await interaction.response.defer()
             if dept in quiz_config.get("departments", {}):
@@ -421,7 +421,7 @@ class SelectDeptView(discord.ui.View):
             except discord.NotFound:
                 pass
             await interaction.edit_original_response(content=f"🗑️ 部署「{dept}」を削除しました。", view=None)
-            
+             
         elif self.action == "toggle":
             await interaction.response.defer()
             if dept in quiz_config.get("departments", {}):
@@ -433,7 +433,7 @@ class SelectDeptView(discord.ui.View):
                 pass
             state = "🟢 募集開始" if quiz_config["departments"][dept]["is_open"] else "🔴 募集停止"
             await interaction.edit_original_response(content=f"🔄 「{dept}」を **{state}** に変更しました。", view=None)
-            
+             
         elif self.action == "add_question":
             await interaction.response.send_modal(AddQuestionsModal(dept, self.admin_msg, self.bot_ref))
             try:
@@ -499,9 +499,9 @@ class AdminPanelEditView(discord.ui.View):
 async def auto_send_user_panel(bot: commands.Bot):
     """起動時に設定データをロードし、永続Viewを登録して指定のチャンネルへ応募パネルを自動更新・送信する"""
     await bot.wait_until_ready()
-    
+     
     await load_config_from_discord(bot)
-    
+     
     bot.add_view(AdminPanelEditView(bot))
     bot.add_view(QuizUserPanelView())
     bot.add_view(ReadyCheckView())
@@ -510,14 +510,14 @@ async def auto_send_user_panel(bot: commands.Bot):
         channel = bot.get_channel(PANEL_AUTO_SEND_CHANNEL_ID)
         if channel is None:
             channel = await bot.fetch_channel(PANEL_AUTO_SEND_CHANNEL_ID)
-        
+         
         if channel:
             embed = discord.Embed(
                 title="✨ 自己推薦・応募受付",
                 description="下のメニューから応募したい部署を選択してください。",
                 color=discord.Color.green()
             )
-            
+             
             existing_message = None
             async for msg in channel.history(limit=20):
                 if msg.author.id == bot.user.id and msg.embeds:
@@ -533,7 +533,8 @@ async def auto_send_user_panel(bot: commands.Bot):
     except Exception as e:
         print(f"❌ [Quiz] 応募パネルの送信・更新に失敗しました: {e}")
 
-def setup_quiz_commands(bot: commands.Bot):
+# 👇 *args, **kwargs を使って複数の引数を受け取れるように変更
+def setup_quiz_commands(bot: commands.Bot, *args, **kwargs):
     @bot.listen('on_ready')
     async def on_quiz_ready():
         if not hasattr(bot, '_quiz_auto_send_task') or bot._quiz_auto_send_task.done():
