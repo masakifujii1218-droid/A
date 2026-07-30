@@ -62,8 +62,8 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録
-setup_quiz_commands(bot)
+# 変更後
+setup_quiz_commands(bot, ADMIN_ROLE_IDS)
 
 # ==========================================
 # JSON 永続化データ管理
