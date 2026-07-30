@@ -10,7 +10,7 @@ import sys
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
 
-# 🛠️ 自己推薦システム（Quiz.py）をインポート【追加】
+# 🛠️ 自己推薦システム（Quiz.py）をインポート
 from quiz import load_config_from_discord, setup_quiz_commands
 
 # ==========================================
@@ -62,7 +62,7 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録【追加】
+# 🛠️ Quiz.py のテキストコマンド (!recommendadminpanel, !recommendpanel) をBotに登録
 setup_quiz_commands(bot)
 
 # ==========================================
@@ -371,18 +371,18 @@ class QuizView(discord.ui.View):
         self.stop()
 
 # ==========================================
-# 🐺 人狼ゲーム システム
+# 🐺 人狼ゲーム システム（チャンネル内エフェメラル完全対応版）
 # ==========================================
 active_games = {} # { channel_id: GameSession }
 
 class WolfSelect(discord.ui.Select):
-    def __init__(self, alive_players, voter):
+    def __init__(self, alive_players, voter, placeholder_text):
         self.voter = voter
         options = [
             discord.SelectOption(label=p.display_name, value=str(p.id))
             for p in alive_players if p != voter
         ]
-        super().__init__(placeholder="選択してください...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder=placeholder_text, min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user != self.voter:
@@ -393,14 +393,14 @@ class WolfSelect(discord.ui.Select):
         target = interaction.guild.get_member(target_id)
         
         self.view.selected_target = target
-        await interaction.response.send_message(f"【 **{target.display_name}** 】を選択しました。", ephemeral=True)
+        await interaction.response.send_message(f"✅ 【 **{target.display_name}** 】を選択しました。", ephemeral=True)
         self.view.stop()
 
 class WolfSelectView(discord.ui.View):
-    def __init__(self, alive_players, voter):
-        super().__init__(timeout=60.0)
+    def __init__(self, alive_players, voter, placeholder_text):
+        super().__init__(timeout=30.0)
         self.selected_target = None
-        self.add_item(WolfSelect(alive_players, voter))
+        self.add_item(WolfSelect(alive_players, voter, placeholder_text))
 
 class WolfLobbyView(discord.ui.View):
     def __init__(self, host):
@@ -437,7 +437,7 @@ class WolfLobbyView(discord.ui.View):
         
         start_embed = discord.Embed(
             title="🐺 人狼ゲームが開始されました！",
-            description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーに役職を送信しました。確認してください！",
+            description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーに役職を割り振りました。ゲームチャンネルを確認してください！",
             color=discord.Color.dark_purple()
         )
         await interaction.response.edit_message(embed=start_embed, view=self)
@@ -466,15 +466,16 @@ class WolfGameSession:
                 return p
         return None
 
-    async def send_roles(self):
-        for p, role in self.roles.items():
-            try:
-                await p.send(f"今回のあなたの役職は【 **{role}** 】です！")
-            except:
-                await self.channel.send(f"{p.mention} さんのDMが閉じているため役職を送信できませんでした！", delete_after=10)
-
     async def run_game_loop(self):
-        await self.send_roles()
+        for p in self.players:
+            role = self.roles[p]
+            try:
+                await self.channel.send(
+                    f"{p.mention} さん宛の役職通知です（このメッセージはあなたにしか見えません）。\n今回のあなたの役職は【 **{role}** 】です！",
+                    ephemeral=True
+                )
+            except Exception:
+                pass
 
         while self.is_running:
             self.day_count += 1
@@ -484,7 +485,7 @@ class WolfGameSession:
             
             night_embed = discord.Embed(
                 title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
-                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか密かに選択してください。",
+                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、自分だけに表示されるメニューから選択してください。",
                 color=discord.Color.dark_purple()
             )
             await self.channel.send(embed=night_embed)
@@ -493,10 +494,15 @@ class WolfGameSession:
             for wolf in wolves:
                 if wolf not in self.alive:
                     continue
-                view = WolfSelectView(self.alive, wolf)
+                
+                view = WolfSelectView(self.alive, wolf, "今夜襲撃する相手を選んでね...")
                 try:
-                    await wolf.send("今夜襲撃する相手を選んでください：", view=view)
-                except:
+                    await self.channel.send(
+                        f"{wolf.mention} さん、今夜襲撃する相手を選んでください：",
+                        view=view,
+                        ephemeral=True
+                    )
+                except Exception:
                     pass
                 
                 await view.wait()
@@ -509,7 +515,7 @@ class WolfGameSession:
 
             if not self.is_running: break
 
-            # --- ☀️ 朝のフェーズ ---
+            # --- ☀️ 朝のフェーズ（選択直後に即時反映） ---
             if killed_target in self.alive:
                 self.alive.remove(killed_target)
 
@@ -544,22 +550,23 @@ class WolfGameSession:
             # --- 🗣️ 昼の議論 ＆ ⚖️ 投票フェーズ ---
             disc_embed = discord.Embed(
                 title="🗣️ 昼の議論タイム",
-                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（非表示のメニューで誰に投票するか選んでください。全員の投票が終わる、または時間切れになると結果が出ます）",
+                description="生き残ったメンバーで自由に話し合い、誰が人狼か推理してください。\n（順番に自分だけに表示されるメニューから処刑する相手を選びます）",
                 color=discord.Color.green()
             )
             await self.channel.send(embed=disc_embed)
 
             votes = {}
-            tasks = []
             for voter in list(self.alive):
-                view = WolfSelectView(self.alive, voter)
+                view = WolfSelectView(self.alive, voter, "処刑するプレイヤーを選んでね...")
                 try:
-                    await voter.send("【処刑投票】本日処刑するプレイヤーをセレクトメニューから選んでください：", view=view)
-                except:
+                    await self.channel.send(
+                        f"{voter.mention} さん、【処刑投票】本日処刑するプレイヤーを選んでください：",
+                        view=view,
+                        ephemeral=True
+                    )
+                except Exception:
                     pass
-                tasks.append((voter, view))
-
-            for voter, view in tasks:
+                
                 await view.wait()
                 if view.selected_target:
                     votes[voter] = view.selected_target
@@ -892,7 +899,6 @@ async def botinfo_command(ctx):
 
     await ctx.send(embed=embed)
 
-# 🔄 Render再起動用 !restart コマンド
 @bot.command(name="restart")
 async def restart_command(ctx):
     user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
