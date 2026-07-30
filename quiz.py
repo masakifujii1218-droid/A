@@ -592,17 +592,18 @@ def setup_quiz_commands(bot: commands.Bot):
         )
         await ctx.send(embed=embed, view=CloseConfirmView())
 
-@bot.command(name="sendmessage")
-async def send_message_cmd(ctx, channel: discord.TextChannel, *, message: str):
-    user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
-    has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
+def setup_quiz_commands(bot, ADMIN_ROLE_IDS):
+    @bot.command(name="sendmessage")
+    async def send_message_cmd(ctx, channel: discord.TextChannel, *, message: str):
+        user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+        has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
 
-    if not has_permission:
-        await ctx.send("❌ このコマンドを実行する権限がありません。")
-        return
+        if not has_permission:
+            await ctx.send("❌ このコマンドを実行する権限がありません。")
+            return
 
-    try:
-        await channel.send(message)
-        await ctx.send(f"✅ {channel.mention} にメッセージを送信しました。")
-    except Exception as e:
-        await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
+        try:
+            await channel.send(message)
+            await ctx.send(f"✅ {channel.mention} にメッセージを送信しました。")
+        except Exception as e:
+            await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
