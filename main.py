@@ -381,14 +381,51 @@ import random
 import asyncio
 
 # ==========================================
-# 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力版）
+# 🐺 人狼ゲーム システム（制限時間なし・DMテキスト入力・人狼2人対応版）
 # ==========================================
+
 active_games = {} # { channel_id: GameSession }
+REQUIRED_ROLE_ID = 1510405214811852900
+
+class WolfConfigView(discord.ui.View):
+    """6人以上の場合にホストが人狼の数を選択するためのView"""
+    def __init__(self, host, joined_players, is_privileged, channel, bot):
+        super().__init__(timeout=60.0)
+        self.host = host
+        self.joined_players = joined_players
+        self.is_privileged = is_privileged
+        self.channel = channel
+        self.bot = bot
+
+    @discord.ui.button(label="人狼 1人", style=discord.ButtonStyle.primary, custom_id="wolf_count_1")
+    async def wolf_one(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.host:
+            await interaction.response.send_message("ホストのみ選択できます！", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="🐺 人狼の数を **1人** に設定しました。ゲームを開始します！", view=None)
+        self.stop()
+        await self.start_game(1)
+
+    @discord.ui.button(label="人狼 2人", style=discord.ButtonStyle.danger, custom_id="wolf_count_2")
+    async def wolf_two(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.host:
+            await interaction.response.send_message("ホストのみ選択できます！", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="🐺 人狼の数を **2人** に設定しました。ゲームを開始します！", view=None)
+        self.stop()
+        await self.start_game(2)
+
+    async def start_game(self, wolf_count):
+        session = WolfGameSession(self.channel, self.joined_players, self.host, self.bot, wolf_count)
+        active_games[self.channel.id] = session
+        asyncio.create_task(session.run_game_loop())
+
 
 class WolfLobbyView(discord.ui.View):
-    def __init__(self, host):
+    def __init__(self, host, is_privileged: bool):
         super().__init__(timeout=300.0)
         self.host = host
+        self.is_privileged = is_privileged
         self.joined = [host]
 
     def get_embed(self):
@@ -411,44 +448,77 @@ class WolfLobbyView(discord.ui.View):
         if interaction.user != self.host:
             await interaction.response.send_message("ホストのみがスタートできます！", ephemeral=True)
             return
-        if len(self.joined) < 3:
-            await interaction.response.send_message("最低3人必要です！", ephemeral=True)
+        
+        min_players = 1 if self.is_privileged else 3
+        if len(self.joined) < min_players:
+            msg = "最低1人必要です！" if self.is_privileged else "最低3人必要です！"
+            await interaction.response.send_message(msg, ephemeral=True)
             return
         
         for item in self.children:
             item.disabled = True
-        
-        start_embed = discord.Embed(
-            title="🐺 人狼ゲームが開始されました！",
-            description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーの **DM（ダイレクトメッセージ）** に役職を配布しました。確認してください！",
-            color=discord.Color.dark_purple()
-        )
-        await interaction.response.edit_message(embed=start_embed, view=self)
-        self.stop()
 
-        session = WolfGameSession(interaction.channel, self.joined, self.host, interaction.client)
-        active_games[interaction.channel.id] = session
-        asyncio.create_task(session.run_game_loop())
+        if len(self.joined) >= 6:
+            try:
+                config_view = WolfConfigView(self.host, self.joined, self.is_privileged, interaction.channel, interaction.client)
+                await self.host.send(
+                    f"👑 **【ホスト専用設定】**\n"
+                    f"参加者が **{len(self.joined)}人** 集まりました！\n"
+                    f"今回のゲームにおける「人狼の数」を以下のボタンから選んでください：",
+                    view=config_view
+                )
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title="🐺 人狼ゲームが開始準備中です",
+                        description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\nホストの **DM** に人狼の人数を選択する案内を送りました。確認してください！",
+                        color=discord.Color.dark_purple()
+                    ), 
+                    view=self
+                )
+            except Exception:
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title="🐺 人狼ゲームが開始されました！",
+                        description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーの **DM** に役職を配布しました！",
+                        color=discord.Color.dark_purple()
+                    ), 
+                    view=self
+                )
+                self.stop()
+                session = WolfGameSession(interaction.channel, self.joined, self.host, interaction.client, wolf_count=1)
+                active_games[interaction.channel.id] = session
+                asyncio.create_task(session.run_game_loop())
+        else:
+            start_embed = discord.Embed(
+                title="🐺 人狼ゲームが開始されました！",
+                description=f"参加者: {', '.join([p.mention for p in self.joined])}\n\n各プレイヤーの **DM** に役職を配布しました。確認してください！",
+                color=discord.Color.dark_purple()
+            )
+            await interaction.response.edit_message(embed=start_embed, view=self)
+            self.stop()
+
+            session = WolfGameSession(interaction.channel, self.joined, self.host, interaction.client, wolf_count=1)
+            active_games[interaction.channel.id] = session
+            asyncio.create_task(session.run_game_loop())
+
 
 class WolfGameSession:
-    def __init__(self, channel, players, host, bot):
+    def __init__(self, channel, players, host, bot, wolf_count):
         self.channel = channel
         self.players = players
         self.host = host
         self.bot = bot
         self.is_running = True
         
-        roles_list = ["🐺 人狼"] + ["🧑‍🌾 村人"] * (len(players) - 1)
+        actual_wolf_count = min(wolf_count, len(players) - 1) if len(players) > 1 else 1
+        roles_list = ["🐺 人狼"] * actual_wolf_count + ["🧑‍🌾 村人"] * (len(players) - actual_wolf_count)
         random.shuffle(roles_list)
         self.roles = dict(zip(players, roles_list))
         self.alive = list(players)
         self.day_count = 0
 
-    def get_wolf_player(self):
-        for p, role in self.roles.items():
-            if role == "🐺 人狼":
-                return p
-        return None
+    def get_wolf_players(self):
+        return [p for p, role in self.roles.items() if role == "🐺 人狼"]
 
     async def get_text_input(self, user, prompt_text, valid_targets):
         """DMでメッセージ入力を受け付け、有効な対象プレイヤーを返す（制限時間なし）"""
@@ -472,7 +542,6 @@ class WolfGameSession:
 
         while self.is_running:
             try:
-                # timeoutを指定しないことで無制限に待機します
                 msg = await self.bot.wait_for('message', check=check)
                 content = msg.content.strip()
                 for p in valid_targets:
@@ -487,11 +556,16 @@ class WolfGameSession:
         return None
 
     async def run_game_loop(self):
-        # 役職を各プレイヤーのDMへ送信
+        wolves = self.get_wolf_players()
+
         for p in self.players:
             role = self.roles[p]
             try:
-                await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！この内容は他の人には秘密にしてください。")
+                if role == "🐺 人狼" and len(wolves) == 2:
+                    partner = [w for w in wolves if w != p][0]
+                    await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！\nもう1人の人狼の相方は {partner.mention} さんです。協力して村人を襲撃しましょう！")
+                else:
+                    await p.send(f"🔒 【役職通知】\n今回のあなたの役職は【 **{role}** 】です！この内容は他の人には秘密にしてください。")
             except Exception:
                 await self.channel.send(f"{p.mention} さんのDMが閉じているため役職を送信できませんでした！設定を確認してください。", delete_after=10)
 
@@ -505,7 +579,7 @@ class WolfGameSession:
             self.day_count += 1
             
             # --- 🌙 夜のフェーズ ---
-            wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+            current_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
             
             night_embed = discord.Embed(
                 title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
@@ -519,7 +593,7 @@ class WolfGameSession:
             if not valid_targets:
                 valid_targets = self.alive
 
-            for wolf in wolves:
+            for wolf in current_wolves:
                 if wolf not in self.alive:
                     continue
                 
@@ -557,14 +631,16 @@ class WolfGameSession:
             )
             await self.channel.send(content=killed_target.mention, embed=morning_embed)
 
-            wolf_player = self.get_wolf_player()
             alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+            
+            # 💡 終了時の表示を「人狼は〇〇と〇〇でした」の形式に対応
+            wolves_str = " と ".join([w.mention for w in wolves]) if len(wolves) == 2 else wolves[0].mention
 
-            if len(self.alive) == 2 and len(alive_wolves) == 1:
+            if len(self.alive) <= len(alive_wolves) and len(alive_wolves) > 0:
                 await self.channel.send(
                     f"🐺 **人狼陣営の勝利！**\n"
-                    f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
-                    f"今回の人狼は **{wolf_player.mention}** でした！"
+                    f"人狼の数が生存者の過半数（または同数）になりました！\n"
+                    f"今回の人狼は **{wolves_str}** でした！"
                 )
                 break
 
@@ -572,7 +648,7 @@ class WolfGameSession:
                 await self.channel.send(
                     f"🎉 **村人陣営の勝利！**\n"
                     f"人狼が排除されました！\n"
-                    f"今回の人狼は **{wolf_player.mention}** でした！"
+                    f"今回の人狼は **{wolves_str}** でした！"
                 )
                 break
 
@@ -615,30 +691,41 @@ class WolfGameSession:
                     vote_counts[target] = vote_counts.get(target, 0) + 1
                 
                 executed_target = max(vote_counts, key=vote_counts.get)
-                self.alive.remove(executed_target)
+                if executed_target in self.alive:
+                    self.alive.remove(executed_target)
 
-                exec_embed = discord.Embed(
-                    title="⚖️ 処刑結果",
-                    description=f"村人たちの投票により、**{executed_target.mention}** さんが処刑されました。\n\n彼の正体は… 【 **{self.roles[executed_target]}** 】 でした！",
-                    color=discord.Color.red()
-                )
+                # 💡 処刑された人が人狼で、まだ相方のもう1人の人狼が生き残っている場合の通知を追加
+                executed_role = self.roles[executed_target]
+                alive_wolves_after = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+
+                if executed_role == "🐺 人狼" and len(wolves) == 2 and len(alive_wolves_after) > 0:
+                    exec_embed = discord.Embed(
+                        title="⚖️ 処刑結果",
+                        description=f"村人たちの投票により、**{executed_target.mention}** さんが処刑されました。\n\n彼の正体は… 【 **{executed_role}** 】 でした！\n\n⚠️ しかし、村には**もう1人の人狼**がまだ潜んでいます…！",
+                        color=discord.Color.red()
+                    )
+                else:
+                    exec_embed = discord.Embed(
+                        title="⚖️ 処刑結果",
+                        description=f"村人たちの投票により、**{executed_target.mention}** さんが処刑されました。\n\n彼の正体は… 【 **{executed_role}** 】 でした！",
+                        color=discord.Color.red()
+                    )
+
                 await self.channel.send(embed=exec_embed)
 
-                alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
-
-                if not alive_wolves:
+                if not alive_wolves_after:
                     await self.channel.send(
                         f"🎉 **村人陣営の勝利！**\n"
                         f"人狼を見つけ出して処刑しました！\n"
-                        f"今回の人狼は **{wolf_player.mention}** でした！"
+                        f"今回の人狼は **{wolves_str}** でした！"
                     )
                     break
 
-                if len(self.alive) == 2 and len(alive_wolves) == 1:
+                if len(self.alive) <= len(alive_wolves_after) and len(alive_wolves_after) > 0:
                     await self.channel.send(
                         f"🐺 **人狼陣営の勝利！**\n"
-                        f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
-                        f"今回の人狼は **{wolf_player.mention}** でした！"
+                        f"人狼の数が生存者の過半数（または同数）になりました！\n"
+                        f"今回の人狼は **{wolves_str}** でした！"
                     )
                     break
             else:
@@ -647,28 +734,34 @@ class WolfGameSession:
         if self.channel.id in active_games:
             del active_games[self.channel.id]
 
-@bot.tree.command(name="wolfgame", description="人狼ゲームの募集を開始します")
-async def wolfgame_command(interaction: discord.Interaction):
-    if interaction.channel.id in active_games:
-        await interaction.response.send_message("このチャンネルではすでに人狼ゲームが進行中です！", ephemeral=True)
-        return
-    view = WolfLobbyView(host=interaction.user)
-    await interaction.response.send_message(embed=view.get_embed(), view=view)
 
-@bot.tree.command(name="wolfend", description="進行中の人狼ゲームを強制終了します")
-async def wolfend_command(interaction: discord.Interaction):
-    session = active_games.get(interaction.channel.id)
-    if not session:
-        await interaction.response.send_message("このチャンネルで進行中の人狼ゲームはありません。", ephemeral=True)
-        return
-    if interaction.user != session.host and not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("ゲームを強制終了できるのはホストまたは管理者のみです！", ephemeral=True)
-        return
-    session.is_running = False
-    del active_games[interaction.channel.id]
-    await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")
+def setup_wolf_commands(bot: commands.Bot):
+    @bot.tree.command(name="wolfgame", description="人狼ゲームの募集を開始します")
+    async def wolfgame_command(interaction: discord.Interaction):
+        if interaction.channel.id in active_games:
+            await interaction.response.send_message("このチャンネルではすでに人狼ゲームが進行中です！", ephemeral=True)
+            return
+        
+        has_role = any(r.id == REQUIRED_ROLE_ID for r in interaction.user.roles)
+        is_privileged = has_role or interaction.user.guild_permissions.administrator
 
-# ==========================================
+        view = WolfLobbyView(host=interaction.user, is_privileged=is_privileged)
+        await interaction.response.send_message(embed=view.get_embed(), view=view)
+
+    @bot.tree.command(name="wolfend", description="進行中の人狼ゲームを強制終了します")
+    async def wolfend_command(interaction: discord.Interaction):
+        session = active_games.get(interaction.channel.id)
+        if not session:
+            await interaction.response.send_message("このチャンネルで進行中の人狼ゲームはありません。", ephemeral=True)
+            return
+        if interaction.user != session.host and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("ゲームを強制終了できるのはホストまたは管理者のみです！", ephemeral=True)
+            return
+        
+        session.is_running = False
+        if interaction.channel.id in active_games:
+            del active_games[interaction.channel.id]
+        await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")# ==========================================
 # 🎮 ミニゲーム1: じゃんけん (/janken)
 # ==========================================
 class JankenView(discord.ui.View):
