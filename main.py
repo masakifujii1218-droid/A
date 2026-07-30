@@ -62,7 +62,9 @@ from discord import app_commands
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 変更後
+# 管理者として許可するロールのIDをここに指定します（実際のロールIDに書き換えてください）
+ADMIN_ROLE_IDS = [1510405214811852900]
+
 setup_quiz_commands(bot, ADMIN_ROLE_IDS)
 
 # ==========================================
