@@ -31,11 +31,10 @@ quiz_config = {
 }
 
 def is_admin_role_or_higher(user: discord.Member) -> bool:
-    """指定ロール(ADMIN_ROLE_ID)か、それより上位の位置(position)にあるロールを持っているか判定"""
+    """指定ロール(ADMIN_ROLE_ID)か、それより上位の位置にあるロールを持っているか判定"""
     if not isinstance(user, discord.Member):
         return False
     
-    # サーバーオーナーは無条件で許可
     if user.guild.owner_id == user.id:
         return True
 
@@ -43,7 +42,6 @@ def is_admin_role_or_higher(user: discord.Member) -> bool:
     if not target_role:
         return user.guild_permissions.administrator
 
-    # ユーザーが持つ最高位ロールの位置が、指定ロールの位置以上かチェック
     return user.top_role.position >= target_role.position
 
 async def get_config_channel(bot: commands.Bot):
@@ -53,18 +51,15 @@ async def get_config_channel(bot: commands.Bot):
         try:
             channel = await bot.fetch_channel(CONFIG_CHANNEL_ID)
         except Exception as e:
-            print(f"❌ [Quiz] 設定保存用チャンネル (ID: {CONFIG_CHANNEL_ID}) の取得に失敗しました: {e}")
+            print(f"❌ [Quiz] 設定保存用チャンネルの取得に失敗しました: {e}")
             return None
     return channel
 
 async def save_config_to_discord(bot: commands.Bot):
     """設定データを指定のチャンネルに自動保存・更新する"""
     global config_message_id
-    print("🚀 [Quiz] データ保存処理 (save_config_to_discord) を開始します...")
-    
     channel = await get_config_channel(bot)
     if not channel:
-        print(f"❌ [Quiz] 保存用チャンネルが見つからないため保存を中断しました。")
         return
 
     content = f"```json\n{json.dumps(quiz_config, ensure_ascii=False, indent=2)}\n```"
@@ -73,27 +68,20 @@ async def save_config_to_discord(bot: commands.Bot):
             try:
                 msg = await channel.fetch_message(config_message_id)
                 await msg.edit(content=content)
-                print("✅ [Quiz] 設定データをDiscord上で更新しました。")
                 return
             except discord.NotFound:
-                print("⚠️ [Quiz] 保存用メッセージが見つかりませんでした。新規作成します。")
-            except Exception as e:
-                print(f"⚠️ [Quiz] メッセージ編集失敗: {e}")
+                pass
         
         msg = await channel.send(content=content)
         config_message_id = msg.id
-        print(f"✅ [Quiz] 設定データをDiscordに新規保存しました。(Message ID: {config_message_id})")
     except Exception as e:
         print(f"❌ [Quiz] 設定保存エラー: {e}")
 
 async def load_config_from_discord(bot: commands.Bot):
     """起動時にDiscordから設定データを読み込む"""
     global config_message_id, quiz_config
-    print("🔄 [Quiz] Discordから設定データの復旧を開始します...")
-    
     channel = await get_config_channel(bot)
     if not channel:
-        print(f"⚠️ [Quiz] 設定保存用チャンネルが見つかりませんでした。初期値で動作します。")
         return
 
     try:
@@ -106,9 +94,7 @@ async def load_config_from_discord(bot: commands.Bot):
                     quiz_config.clear()
                     quiz_config.update(loaded_data)
                     config_message_id = msg.id
-                    print(f"✅ [Quiz] 設定データをDiscordから正常に復旧しました。(Message ID: {config_message_id})")
                     return
-        print("ℹ️ [Quiz] 有効な保存データが見つかりませんでした。初期設定を使用します。")
     except Exception as e:
         print(f"❌ [Quiz] 設定復旧エラー: {e}")
 
@@ -206,7 +192,7 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
         except asyncio.TimeoutError:
             timeout_embed = discord.Embed(
                 title="⏱️ タイムアウト",
-                description="30分間回答がなかったため、質問セッションを終了しました。\n再度やり直す場合は `!closereq` でチャンネルをクローズし、はじめから申請し直してください。",
+                description="30分間回答がなかったため、質問セッションを終了しました。\n再度やり直す場合は `!closereq` でチャンネルをクローズしてください。",
                 color=discord.Color.red()
             )
             await channel.send(embed=timeout_embed)
@@ -233,8 +219,8 @@ async def start_quiz_session(channel: discord.TextChannel, applicant: discord.Me
     if log_channel is None:
         try:
             log_channel = await bot.fetch_channel(LOG_CHANNEL_ID)
-        except Exception as e:
-            print(f"❌ ログチャンネルの取得に失敗しました: {e}")
+        except Exception:
+            pass
 
     if log_channel:
         await log_channel.send(embed=result_embed)
@@ -257,11 +243,10 @@ class ReadyCheckView(discord.ui.View):
         button.disabled = True
         try:
             await interaction.edit_original_response(content="👍 準備完了ですね！それでは質問を開始します。", view=None)
-        except Exception as e:
-            print(f"⚠️ メッセージ編集エラー: {e}")
+        except Exception:
+            pass
         
         applicant = self.applicant or interaction.user
-        
         questions = self.questions
         if not questions and self.dept_name:
             questions = quiz_config.get("departments", {}).get(self.dept_name, {}).get("questions", [])
@@ -304,14 +289,12 @@ class QuizUserPanelSelect(discord.ui.Select):
         }
 
         base_admin_role = guild.get_role(ADMIN_ROLE_ID)
-        
         if base_admin_role:
             for role in guild.roles:
                 if role.position >= base_admin_role.position:
                     overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
         category = interaction.channel.category
-        
         ticket_channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
@@ -325,7 +308,7 @@ class QuizUserPanelSelect(discord.ui.Select):
 
         ready_embed = discord.Embed(
             title=f"📋 {dept_name} 応募手続き",
-            description=f"{user.mention} さん、専用チャンネルを作成しました。\n\n**準備はできましたか？**\n以下の「はい (開始する)」ボタンを押すと質問を開始します。",
+            description=f"{user.mention} さん、専用チャンネルを作成しました。\n\n**準備はできましたか？**\n以下のボタンを押すと質問を開始します。",
             color=discord.Color.green()
         )
         ready_embed.add_field(name="🆔 Discord ID", value=f"`{user.id}`", inline=False)
@@ -372,7 +355,7 @@ class AddQuestionsModal(discord.ui.Modal):
     questions_text = discord.ui.TextInput(
         label="質問内容（1行につき1問）",
         style=discord.TextStyle.paragraph,
-        placeholder="例:\n志望動機を教えてください\n得意な言語は何ですか\n過去の制作実績はありますか",
+        placeholder="例:\n志望動機を教えてください\n得意な言語は何ですか",
         required=True,
         max_length=2000
     )
@@ -517,10 +500,8 @@ async def auto_send_user_panel(bot: commands.Bot):
     """起動時に設定データをロードし、永続Viewを登録して指定のチャンネルへ応募パネルを自動更新・送信する"""
     await bot.wait_until_ready()
     
-    # 復旧処理を実行
     await load_config_from_discord(bot)
     
-    # 設定ロード後に各種Viewを永続化登録
     bot.add_view(AdminPanelEditView(bot))
     bot.add_view(QuizUserPanelView())
     bot.add_view(ReadyCheckView())
@@ -537,7 +518,6 @@ async def auto_send_user_panel(bot: commands.Bot):
                 color=discord.Color.green()
             )
             
-            # チャンネルの過去メッセージ（最新20件）を検索して、BOT自身が送信した既存パネルを探す
             existing_message = None
             async for msg in channel.history(limit=20):
                 if msg.author.id == bot.user.id and msg.embeds:
@@ -546,13 +526,9 @@ async def auto_send_user_panel(bot: commands.Bot):
                         break
 
             if existing_message:
-                # 既存パネルが存在する場合は編集更新（最新の部署選択メニューに更新）
                 await existing_message.edit(embed=embed, view=QuizUserPanelView())
-                print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) の既存応募パネルを編集・更新しました。")
             else:
-                # 存在しない場合は新規送信
                 await channel.send(embed=embed, view=QuizUserPanelView())
-                print(f"✅ [Quiz] チャンネル (ID: {PANEL_AUTO_SEND_CHANNEL_ID}) へ新規に応募パネルを送信しました。")
 
     except Exception as e:
         print(f"❌ [Quiz] 応募パネルの送信・更新に失敗しました: {e}")
@@ -592,13 +568,10 @@ def setup_quiz_commands(bot: commands.Bot):
         )
         await ctx.send(embed=embed, view=CloseConfirmView())
 
-def setup_quiz_commands(bot, ADMIN_ROLE_IDS):
     @bot.command(name="sendmessage")
-    async def send_message_cmd(ctx, channel: discord.TextChannel, *, message: str):
-        user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
-        has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
-
-        if not has_permission:
+    async def send_message_cmd(ctx: commands.Context, channel: discord.TextChannel, *, message: str):
+        """指定チャンネルにメッセージを送信する管理者用コマンド"""
+        if not is_admin_role_or_higher(ctx.author):
             await ctx.send("❌ このコマンドを実行する権限がありません。")
             return
 
