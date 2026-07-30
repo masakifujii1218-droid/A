@@ -761,7 +761,8 @@ def setup_wolf_commands(bot: commands.Bot):
         session.is_running = False
         if interaction.channel.id in active_games:
             del active_games[interaction.channel.id]
-        await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")# ==========================================
+        await interaction.response.send_message("🛑 ホストによって人狼ゲームが強制終了されました。")
+# ==========================================
 # 🎮 ミニゲーム1: じゃんけん (/janken)
 # ==========================================
 class JankenView(discord.ui.View):
