@@ -597,12 +597,13 @@ def setup_quiz_commands(bot: commands.Bot):
         # 権限チェック (既存の ADMIN_ADMIN_ROLE_IDS や権限ロジックに合わせて調整)
         user_role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
         has_permission = any(role_id in ADMIN_ROLE_IDS for role_id in user_role_ids)
-    if not has_permission:
-        await ctx.send("❌ このコマンドを実行する権限がありません。")
-        return
 
-    try:
-        await channel.send(message)
-        await ctx.send(f"✅ {channel.mention} にメッセージを送信しました。")
-    except Exception as e:
-        await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
+        if not has_permission:
+            await ctx.send("❌ このコマンドを実行する権限がありません。")
+            return
+
+        try:
+            await channel.send(message)
+            await ctx.send(f"✅ {channel.mention} にメッセージを送信しました。")
+        except Exception as e:
+            await ctx.send(f"❌ メッセージの送信に失敗しました: {e}")
