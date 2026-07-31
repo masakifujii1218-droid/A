@@ -258,15 +258,23 @@ class SupportClaimView(discord.ui.View):
 # ==========================================
 # Modmail イベント設定
 # ==========================================
+
+modmail_enabled = True # サポート機能の一時停止/再開を管理するフラグ
+
 def setup_modmail_events(bot: commands.Bot, active_games_dict: dict = None):
 
     @bot.event
     async def on_message(message: discord.Message):
+        global modmail_enabled
         if message.author.bot:
             return
 
         # 1. ユーザー ➡ BotへのDM
         if isinstance(message.channel, discord.DMChannel):
+            if not modmail_enabled:
+                await message.channel.send("❌ 現在サポート機能は一時停止中です。再開までお待ちください。")
+                return
+
             if not bot.guilds: return
             guild = bot.guilds[0]
             
@@ -344,8 +352,20 @@ def setup_modmail_events(bot: commands.Bot, active_games_dict: dict = None):
 
         await bot.process_commands(message)
 
+    @bot.command(name="supportstop")
+    @commands.has_permissions(administrator=True)
+    async def support_stop(ctx):
+        global modmail_enabled
+        modmail_enabled = False
+        await ctx.send("🛑 サポート機能（Modmail）を一時停止しました。")
 
-# ==========================================
+    @bot.command(name="supportstart")
+    @commands.has_permissions(administrator=True)
+    async def support_start(ctx):
+        global modmail_enabled
+        modmail_enabled = True
+        await ctx.send("▶️ サポート機能（Modmail）を再開しました。")
+        # ==========================================
 # 管理・一般コマンド (各種スラッシュコマンド)
 # ==========================================
 def setup_slash_commands(bot: commands.Bot):
