@@ -6,6 +6,7 @@ import threading
 import time
 import asyncio
 import sys
+from google import genai
 
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
