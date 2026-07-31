@@ -885,10 +885,36 @@ async def russian(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed, view=view)
 
-# 4. スロットゲーム (/slot)
+import asyncio
+
+# ==========================================
+# 4. スロットゲーム (/slot) アニメーション付き
+# ==========================================
 @bot.tree.command(name="slot", description="スロットを回して運試しをしよう！")
 async def slot(interaction: discord.Interaction):
-    symbols = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
+    symbols = ["🍒", "🇯🇵", "🔔", "⭐", "💎", "📝"]
+    
+    # 最初に「スロットを回しています…」と送信する
+    embed = discord.Embed(
+        title="🎰 スロットマシン",
+        description="【 🔄 | 🔄 | 🔄 】\n\n**スロット回転中……**",
+        color=discord.Color.blurple()
+    )
+    await interaction.response.send_message(embed=embed)
+    
+    # パタパタと絵文字を変える演出（3回繰り返す）
+    for _ in range(3):
+        await asyncio.sleep(0.6) # 0.6秒ごとに切り替え
+        temp_result = [random.choice(symbols) for _ in range(3)]
+        temp_embed = discord.Embed(
+            title="🎰 スロットマシン",
+            description=f"【 {temp_result[0]} | {temp_result[1]} | {temp_result[2]} 】\n\n**回転中…… 🔄**",
+            color=discord.Color.blurple()
+        )
+        await interaction.edit_original_response(embed=temp_embed)
+    
+    # 最後に最終結果を決定
+    await asyncio.sleep(0.6)
     result = [random.choice(symbols) for _ in range(3)]
     
     if result[0] == result[1] == result[2]:
@@ -901,14 +927,12 @@ async def slot(interaction: discord.Interaction):
         outcome = "ハズレ…また挑戦してね！ 😢"
         color = discord.Color.red()
         
-    embed = discord.Embed(
+    final_embed = discord.Embed(
         title="🎰 スロットマシン",
         description=f"【 {result[0]} | {result[1]} | {result[2]} 】\n\n**{outcome}**",
         color=color
     )
-    await interaction.response.send_message(embed=embed)
-
-
+    await interaction.edit_original_response(embed=final_embed)
 # ==========================================
 # 🔍 検索コーナー（AI検索・wiki検索）
 # ==========================================
