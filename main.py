@@ -776,18 +776,11 @@ async def quiz_command(interaction: discord.Interaction):
 
 # minigame
 # ボットの基本設定
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"Logged in as {bot.user} (オールインワンモード)")
-
 # ==========================================
+# 🎮 ミニゲームコーナー（おみくじ・じゃんけん・ロシアンルーレット・スロット）
+# ==========================================
+
 # 1. おみくじ (/omikuji)
-# ==========================================
 @bot.tree.command(name="omikuji", description="今日の運勢を占います！")
 async def omikuji(interaction: discord.Interaction):
     results = ["大吉 🌟", "中吉 ✨", "小吉 🌙", "吉 🌱", "凶 💧", "大凶 💀"]
@@ -800,9 +793,7 @@ async def omikuji(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# ==========================================
 # 2. じゃんけん (/janken)
-# ==========================================
 @bot.tree.command(name="janken", description="ボットとじゃんけん勝負をします！")
 async def janken(interaction: discord.Interaction, 選択: str):
     choices = ["グー", "チョキ", "パー"]
@@ -833,88 +824,134 @@ async def janken(interaction: discord.Interaction, 選択: str):
     )
     await interaction.response.send_message(embed=embed)
 
-# ==========================================
-# 3. ロビアンスルーレット（ロシアンルーレット） (/russian)
-# ==========================================
-@bot.tree.command(name="russian", description="ハラハラドキドキのロシアンルーレット！")
-async def russian(interaction: discord.Interaction):
-    is_hit = random.randint(1, 6) == 1
-    if is_hit:
-        embed = discord.Embed(
-            title="💥 ロシアンルーレット",
-            description=f"{interaction.user.mention} さんの選んだ銃口から弾が発射された…！ **ドカーン！💥**（アウト！）",
-            color=discord.Color.red()
-        )
-    else:
-        embed = discord.Embed(
-            title="✨ ロシアンルーレット",
-            description=f"{interaction.user.mention} さん、カチッ……何も起きませんでした。セーフ！ 😌",
-            color=discord.Color.green()
-        )
-    await interaction.response.send_message(embed=embed)
+# 3. ボタン式ロシアンルーレット (/russian)
+class RussianButtonView(discord.ui.View):
+    def __init__(self, user):
+        super().__init__(timeout=60.0)
+        self.user = user
+        self.loser_index = random.randint(0, 3)
 
-# ==========================================
-# 4. Gemini検索 (/search)
-# ==========================================
-@bot.tree.command(name="search", description="Geminiを使って質問や検索をします")
-async def search(interaction: discord.Interaction, キーワード: str):
-    # ※本物のGemini APIを使う場合は google-genai ライブラリ等を使用しますが、
-    # ここでは簡易的なプレースホルダーとして案内を出しています。
-    # 実際のAPIキーやクライアント設定をここに組み込んで使えます。
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.user:
+            await interaction.response.send_message("あなたが始めたゲームではありません！", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="ボタン①", style=discord.ButtonStyle.secondary, custom_id="btn_0")
+    async def btn_0(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.check_result(interaction, 0)
+
+    @discord.ui.button(label="ボタン②", style=discord.ButtonStyle.secondary, custom_id="btn_1")
+    async def btn_1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.check_result(interaction, 1)
+
+    @discord.ui.button(label="ボタン③", style=discord.ButtonStyle.secondary, custom_id="btn_2")
+    async def btn_2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.check_result(interaction, 2)
+
+    @discord.ui.button(label="ボタン④", style=discord.ButtonStyle.secondary, custom_id="btn_3")
+    async def btn_3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.check_result(interaction, 3)
+
+    async def check_result(self, interaction, chosen_index):
+        for child in self.children:
+            child.disabled = True
+
+        if chosen_index == self.loser_index:
+            embed = discord.Embed(
+                title="💥 ロシアンルーレット",
+                description=f"{self.user.mention} さん、選んだボタンは… **ハズレ（ドカーン！）** 💥",
+                color=discord.Color.red()
+            )
+        else:
+            embed = discord.Embed(
+                title="✨ ロシアンルーレット",
+                description=f"{self.user.mention} さん、選んだボタンは… **セーフ！** 😌",
+                color=discord.Color.green()
+            )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+@bot.tree.command(name="russian", description="4つのボタンから1つ選ぶロシアンルーレット！")
+async def russian(interaction: discord.Interaction):
+    view = RussianButtonView(interaction.user)
     embed = discord.Embed(
-        title="🔍 AI検索結果",
-        description=f"**検索ワード:** {キーワード}\n\n（※ここにGeminiからの回答や検索結果が表示されます）",
-        color=discord.Color.blue()
+        title="🔫 ロシアンルーレット",
+        description=f"{interaction.user.mention} さん、4つのボタンのうち1つがハズレです。どれか一つを押してください！",
+        color=discord.Color.dark_red()
+    )
+    await interaction.response.send_message(embed=embed, view=view)
+
+# 4. スロットゲーム (/slot)
+@bot.tree.command(name="slot", description="スロットを回して運試しをしよう！")
+async def slot(interaction: discord.Interaction):
+    symbols = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
+    result = [random.choice(symbols) for _ in range(3)]
+    
+    if result[0] == result[1] == result[2]:
+        outcome = "大当たり！お見事です！ 🎉✨"
+        color = discord.Color.gold()
+    elif result[0] == result[1] or result[1] == result[2] or result[0] == result[2]:
+        outcome = "惜しい！2つ揃いました！ 👍"
+        color = discord.Color.green()
+    else:
+        outcome = "ハズレ…また挑戦してね！ 😢"
+        color = discord.Color.red()
+        
+    embed = discord.Embed(
+        title="🎰 スロットマシン",
+        description=f"【 {result[0]} | {result[1]} | {result[2]} 】\n\n**{outcome}**",
+        color=color
     )
     await interaction.response.send_message(embed=embed)
 
+
 # ==========================================
-# 5. 専用wiki検索 (/search-robtrain)
+# 🔍 検索コーナー（AI検索・wiki検索）
 # ==========================================
+
+# 5. Gemini検索 (/search)
+@bot.tree.command(name="search", description="Geminiを使って質問や検索をします")
+async def search(interaction: discord.Interaction, キーワード: str):
+    await interaction.response.defer()
+    
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=キーワード,
+        )
+        answer_text = response.text
+        
+        if len(answer_text) > 1900:
+            answer_text = answer_text[:1900] + "...\n（文字数オーバーのため省略しました）"
+
+        embed = discord.Embed(
+            title="🔍 AI検索結果",
+            description=f"**検索ワード:** {キーワード}\n\n{answer_text}",
+            color=discord.Color.blue()
+        )
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        embed = discord.Embed(
+            title="🔍 AI検索エラー",
+            description=f"エラーが発生しました: `{e}`\n(APIキーを確認してください)",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed)
+
+# 6. 専用wiki検索 (/search-robtrain)
 @bot.tree.command(name="search-robtrain", description="RobloxのJPTrain非公式wikiから検索します")
 async def search_robtrain(interaction: discord.Interaction, キーワード: str):
     base_url = "https://w.atwiki.jp/rbxjptrain/"
-    # atwiki等の検索仕様に合わせた簡易リンク案内、またはスクレイピング結果の表示
     encoded_query = urllib.parse.quote(キーワード)
     search_result_url = f"{base_url}search?keyword={encoded_query}"
     
     embed = discord.Embed(
         title="トレイン非公式wiki 検索結果",
-        description=f"「**{キーワード}**」の検索リンクを作成しました。\n\n👉 [検索結果ページを開く]({search_result_url})\n(※直接URL: {base_url})",
+        description=f"「**{キーワード}**」の検索リンクを作成しました。\n\n👉 [検索結果ページを開く]({search_result_url})\n(※直接トップURL: {base_url})",
         color=discord.Color.orange()
-    )
-    await interaction.response.send_message(embed=embed)
-
-# ==========================================
-# 6. ハイアンドローゲーム (/highlow)
-# ==========================================
-@bot.tree.command(name="highlow", description="次の数字が今より「高い」か「低い」かを当てよう！")
-async def highlow(interaction: discord.Interaction, 予想: str):
-    if 予想 not in ["high", "low", "ハイ", "ロー"]:
-        await interaction.response.send_message("予想は `high`（または ハイ）か `low`（または ロー）で指定してね！", ephemeral=True)
-        return
-        
-    current_num = random.randint(1, 100)
-    next_num = random.randint(1, 100)
-    
-    # 数字が同じだった場合はもう一度引き直すか引き分け処理
-    while current_num == next_num:
-        next_num = random.randint(1, 100)
-        
-    is_high = next_num > current_num
-    user_guessed_high = 予想 in ["high", "ハイ"]
-    
-    if (is_high and user_guessed_high) or (not is_high and not user_guessed_high):
-        result_text = "正解です！お見事！ 🎉"
-        color = discord.Color.green()
-    else:
-        result_text = "残念、ハズレです… 😢"
-        color = discord.Color.red()
-        
-    embed = discord.Embed(
-        title="🃏 ハイ＆ローゲーム",
-        description=f"最初の数字: **{current_num}**\nあなたの予想: **{予想}**\n\次の数字は… **{next_num}** でした！\n\n**{result_text}**",
-        color=color
     )
     await interaction.response.send_message(embed=embed)
 
@@ -1030,9 +1067,19 @@ async def on_ready():
 
 if __name__ == "__main__":
     keep_alive()
-    
-    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("エラー: 環境変数 'DISCORD_TOKEN' または 'DISCORD_BOT_TOKEN' が設定されていないか、見つかりません。")
+    import os
+
+# 環境変数からトークンとGeminiのAPIキーを読み込む
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Geminiクライアントの初期化
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# (中略：各コマンドの定義部分)
+
+# 起動処理
+if DISCORD_TOKEN:
+    bot.run(DISCORD_TOKEN)
+else:
+    print("エラー: 環境変数 'DISCORD_TOKEN' が設定されていないか、見つかりません。")
