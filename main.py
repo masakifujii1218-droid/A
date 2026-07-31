@@ -774,6 +774,150 @@ async def quiz_command(interaction: discord.Interaction):
     view = QuizView(quiz_data=quiz, user_id=interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
+# minigame
+# ボットの基本設定
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user} (オールインワンモード)")
+
+# ==========================================
+# 1. おみくじ (/omikuji)
+# ==========================================
+@bot.tree.command(name="omikuji", description="今日の運勢を占います！")
+async def omikuji(interaction: discord.Interaction):
+    results = ["大吉 🌟", "中吉 ✨", "小吉 🌙", "吉 🌱", "凶 💧", "大凶 💀"]
+    result = random.choice(results)
+    
+    embed = discord.Embed(
+        title="⛩️ おみくじ",
+        description=f"{interaction.user.mention} さんの今日の運勢は… **{result}** です！",
+        color=discord.Color.gold()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 2. じゃんけん (/janken)
+# ==========================================
+@bot.tree.command(name="janken", description="ボットとじゃんけん勝負をします！")
+async def janken(interaction: discord.Interaction, 選択: str):
+    choices = ["グー", "チョキ", "パー"]
+    if 選択 not in choices:
+        await interaction.response.send_message("「グー」「チョキ」「パー」の中から選んでね！", ephemeral=True)
+        return
+    
+    bot_choice = random.choice(choices)
+    
+    if 選択 == bot_choice:
+        outcome = "あいこです！ 🤝"
+        color = discord.Color.light_gray()
+    elif (
+        (選択 == "グー" and bot_choice == "チョキ") or
+        (選択 == "チョキ" and bot_choice == "パー") or
+        (選択 == "パー" and bot_choice == "グー")
+    ):
+        outcome = "あなたの勝ちです！ 🎉"
+        color = discord.Color.green()
+    else:
+        outcome = "あなたの負けです… 😢"
+        color = discord.Color.red()
+        
+    embed = discord.Embed(
+        title="✊ ✋ ✌️ じゃんけん勝負",
+        description=f"あなた: **{選択}**\nボット: **{bot_choice}**\n\n**{outcome}**",
+        color=color
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 3. ロビアンスルーレット（ロシアンルーレット） (/russian)
+# ==========================================
+@bot.tree.command(name="russian", description="ハラハラドキドキのロシアンルーレット！")
+async def russian(interaction: discord.Interaction):
+    is_hit = random.randint(1, 6) == 1
+    if is_hit:
+        embed = discord.Embed(
+            title="💥 ロシアンルーレット",
+            description=f"{interaction.user.mention} さんの選んだ銃口から弾が発射された…！ **ドカーン！💥**（アウト！）",
+            color=discord.Color.red()
+        )
+    else:
+        embed = discord.Embed(
+            title="✨ ロシアンルーレット",
+            description=f"{interaction.user.mention} さん、カチッ……何も起きませんでした。セーフ！ 😌",
+            color=discord.Color.green()
+        )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 4. Gemini検索 (/search)
+# ==========================================
+@bot.tree.command(name="search", description="Geminiを使って質問や検索をします")
+async def search(interaction: discord.Interaction, キーワード: str):
+    # ※本物のGemini APIを使う場合は google-genai ライブラリ等を使用しますが、
+    # ここでは簡易的なプレースホルダーとして案内を出しています。
+    # 実際のAPIキーやクライアント設定をここに組み込んで使えます。
+    embed = discord.Embed(
+        title="🔍 AI検索結果",
+        description=f"**検索ワード:** {キーワード}\n\n（※ここにGeminiからの回答や検索結果が表示されます）",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 5. 専用wiki検索 (/search-robtrain)
+# ==========================================
+@bot.tree.command(name="search-robtrain", description="RobloxのJPTrain非公式wikiから検索します")
+async def search_robtrain(interaction: discord.Interaction, キーワード: str):
+    base_url = "https://w.atwiki.jp/rbxjptrain/"
+    # atwiki等の検索仕様に合わせた簡易リンク案内、またはスクレイピング結果の表示
+    encoded_query = urllib.parse.quote(キーワード)
+    search_result_url = f"{base_url}search?keyword={encoded_query}"
+    
+    embed = discord.Embed(
+        title="トレイン非公式wiki 検索結果",
+        description=f"「**{キーワード}**」の検索リンクを作成しました。\n\n👉 [検索結果ページを開く]({search_result_url})\n(※直接URL: {base_url})",
+        color=discord.Color.orange()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 6. ハイアンドローゲーム (/highlow)
+# ==========================================
+@bot.tree.command(name="highlow", description="次の数字が今より「高い」か「低い」かを当てよう！")
+async def highlow(interaction: discord.Interaction, 予想: str):
+    if 予想 not in ["high", "low", "ハイ", "ロー"]:
+        await interaction.response.send_message("予想は `high`（または ハイ）か `low`（または ロー）で指定してね！", ephemeral=True)
+        return
+        
+    current_num = random.randint(1, 100)
+    next_num = random.randint(1, 100)
+    
+    # 数字が同じだった場合はもう一度引き直すか引き分け処理
+    while current_num == next_num:
+        next_num = random.randint(1, 100)
+        
+    is_high = next_num > current_num
+    user_guessed_high = 予想 in ["high", "ハイ"]
+    
+    if (is_high and user_guessed_high) or (not is_high and not user_guessed_high):
+        result_text = "正解です！お見事！ 🎉"
+        color = discord.Color.green()
+    else:
+        result_text = "残念、ハズレです… 😢"
+        color = discord.Color.red()
+        
+    embed = discord.Embed(
+        title="🃏 ハイ＆ローゲーム",
+        description=f"最初の数字: **{current_num}**\nあなたの予想: **{予想}**\n\次の数字は… **{next_num}** でした！\n\n**{result_text}**",
+        color=color
+    )
+    await interaction.response.send_message(embed=embed)
+
 # ==========================================
 # 🛠️ BOT管理部専用 !botinfo & !restart コマンド
 # ==========================================
