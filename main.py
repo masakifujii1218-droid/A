@@ -369,7 +369,8 @@ class QuizView(discord.ui.View):
             )
 
         await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()# ==========================================
+        self.stop()
+# ==========================================
 # 🐺 人狼ゲーム システム（DMテキスト入力版・占い師追加・襲撃失敗追加・勝者表示対応）
 # ==========================================
 
@@ -919,7 +920,7 @@ async def search(interaction: discord.Interaction, キーワード: str):
     
     try:
         response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=キーワード,
         )
         answer_text = response.text
@@ -941,20 +942,6 @@ async def search(interaction: discord.Interaction, キーワード: str):
             color=discord.Color.red()
         )
         await interaction.followup.send(embed=embed)
-
-# 6. 専用wiki検索 (/search-robtrain)
-@bot.tree.command(name="search-robtrain", description="RobloxのJPTrain非公式wikiから検索します")
-async def search_robtrain(interaction: discord.Interaction, キーワード: str):
-    base_url = "https://w.atwiki.jp/rbxjptrain/"
-    encoded_query = urllib.parse.quote(キーワード)
-    search_result_url = f"{base_url}search?keyword={encoded_query}"
-    
-    embed = discord.Embed(
-        title="トレイン非公式wiki 検索結果",
-        description=f"「**{キーワード}**」の検索リンクを作成しました。\n\n👉 [検索結果ページを開く]({search_result_url})\n(※直接トップURL: {base_url})",
-        color=discord.Color.orange()
-    )
-    await interaction.response.send_message(embed=embed)
 
 # ==========================================
 # 🛠️ BOT管理部専用 !botinfo & !restart コマンド
