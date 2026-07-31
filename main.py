@@ -368,9 +368,8 @@ class QuizView(discord.ui.View):
             )
 
         await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
-# ==========================================
-# 🐺 人狼ゲーム システム（DMテキスト入力版）
+        self.stop()# ==========================================
+# 🐺 人狼ゲーム システム（DMテキスト入力版・占い師追加・襲撃失敗追加・勝者表示対応）
 # ==========================================
 
 active_games = {} # { channel_id: GameSession }
@@ -401,8 +400,8 @@ class WolfLobbyView(discord.ui.View):
         if interaction.user != self.host:
             await interaction.response.send_message("ホストのみがスタートできます！", ephemeral=True)
             return
-        if len(self.joined) < 3:
-            await interaction.response.send_message("最低3人必要です！", ephemeral=True)
+        if len(self.joined) < 4:
+            await interaction.response.send_message("占い師を追加するため、最低4人必要です！", ephemeral=True)
             return
         
         for item in self.children:
@@ -428,7 +427,7 @@ class WolfGameSession:
         self.bot = bot
         self.is_running = True
         
-        roles_list = ["🐺 人狼"] + ["🧑‍🌾 村人"] * (len(players) - 1)
+        roles_list = ["🐺 人狼", "🔮 占い師"] + ["🧑‍🌾 村人"] * (len(players) - 2)
         random.shuffle(roles_list)
         self.roles = dict(zip(players, roles_list))
         self.alive = list(players)
@@ -437,6 +436,12 @@ class WolfGameSession:
     def get_wolf_player(self):
         for p, role in self.roles.items():
             if role == "🐺 人狼":
+                return p
+        return None
+
+    def get_seer_player(self):
+        for p, role in self.roles.items():
+            if role == "🔮 占い師":
                 return p
         return None
 
@@ -496,15 +501,38 @@ class WolfGameSession:
             
             # --- 🌙 夜のフェーズ ---
             wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
+            seer = self.get_seer_player()
             
             night_embed = discord.Embed(
                 title=f"🌙 第{self.day_count}日目 - 夜が訪れました",
-                description="村に暗闇が包み込みました...\n人狼は誰を襲撃するか、**人狼のDM**に相手のユーザーネームを入力してください。",
+                description="村に暗闇が包み込みました...\n人狼と占い師はそれぞれの行動をDMで行ってください。",
                 color=discord.Color.dark_purple()
             )
             await self.channel.send(embed=night_embed)
 
+            # 1. 占い師の行動
+            if seer and seer in self.alive:
+                seer_valid_targets = [p for p in self.alive if p != seer]
+                if seer_valid_targets:
+                    target_list_str = "\n".join([f"- {p.name} (表示名: {p.display_name})" for p in seer_valid_targets])
+                    prompt = (
+                        f"🔮 **【占い師の予言】**\n"
+                        f"今夜、誰の正体を知りたいですか？対象の**ユーザーネーム**（または表示名）をDMに送信してください：\n\n"
+                        f"**【生存者一覧】**\n{target_list_str}"
+                    )
+                    seer_target = await self.get_text_input(seer, prompt, seer_valid_targets)
+                    if not self.is_running: break
+                    
+                    if seer_target:
+                        target_role = self.roles[seer_target]
+                        try:
+                            await seer.send(f"🔮 【結果通知】\n**{seer_target.display_name}** の正体は 【 **{target_role}** 】 です。")
+                        except:
+                            pass
+
+            # 2. 人狼の襲撃
             killed_target = None
+            attack_failed = False
             valid_targets = [p for p in self.alive if self.roles[p] != "🐺 人狼"]
             if not valid_targets:
                 valid_targets = self.alive
@@ -524,7 +552,11 @@ class WolfGameSession:
                 if not self.is_running: break
                 
                 if target:
-                    killed_target = target
+                    if random.random() < 0.25:
+                        attack_failed = True
+                    else:
+                        killed_target = target
+                        
                     try:
                         await wolf.send(f"✅ 【 **{target.display_name}** 】への襲撃を受け付けました。")
                     except:
@@ -533,36 +565,49 @@ class WolfGameSession:
 
             if not self.is_running: break
 
-            if not killed_target and self.alive:
+            if not killed_target and not attack_failed and self.alive:
                 killed_target = random.choice(valid_targets or self.alive)
 
             # --- ☀️ 朝のフェーズ ---
-            if killed_target in self.alive:
-                self.alive.remove(killed_target)
+            if attack_failed:
+                morning_embed = discord.Embed(
+                    title=f"☀️ 第{self.day_count}日目 - 朝が来ました",
+                    description="昨夜、人狼が襲撃を試みましたが、ターゲットが反撃して人狼が致命傷を負いました…！\n\n本日の犠牲者はいません（襲撃失敗）。",
+                    color=discord.Color.orange()
+                )
+                await self.channel.send(embed=morning_embed)
+            else:
+                if killed_target in self.alive:
+                    self.alive.remove(killed_target)
 
-            morning_embed = discord.Embed(
-                title=f"☀️ 第{self.day_count}日目 - 朝が来ました",
-                description=f"昨夜の犠牲者が発見されました...\n\n惨たらしい姿で発見されたのは **{killed_target.mention}** さんでした。",
-                color=discord.Color.orange()
-            )
-            await self.channel.send(content=killed_target.mention, embed=morning_embed)
+                morning_embed = discord.Embed(
+                    title=f"☀️ 第{self.day_count}日目 - 朝が来ました",
+                    description=f"昨夜の犠牲者が発見されました...\n\n惨たらしい姿で発見されたのは **{killed_target.mention}** さんでした。",
+                    color=discord.Color.orange()
+                )
+                await self.channel.send(content=killed_target.mention, embed=morning_embed)
 
             wolf_player = self.get_wolf_player()
+            seer_player = self.get_seer_player()
             alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
 
             if len(self.alive) == 2 and len(alive_wolves) == 1:
+                seer_text = f"今回の占い師は **{seer_player.mention}** でした！" if seer_player else ""
                 await self.channel.send(
                     f"🐺 **人狼陣営の勝利！**\n"
                     f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
-                    f"今回の人狼は **{wolf_player.mention}** でした！"
+                    f"今回の人狼は **{wolf_player.mention}** でした！\n"
+                    f"{seer_text}"
                 )
                 break
 
             if not alive_wolves:
+                seer_text = f"今回の占い師は **{seer_player.mention}** でした！" if seer_player else ""
                 await self.channel.send(
                     f"🎉 **村人陣営の勝利！**\n"
                     f"人狼が排除されました！\n"
-                    f"今回の人狼は **{wolf_player.mention}** でした！"
+                    f"今回の人狼は **{wolf_player.mention}** でした！\n"
+                    f"{seer_text}"
                 )
                 break
 
@@ -618,18 +663,22 @@ class WolfGameSession:
                 alive_wolves = [p for p in self.alive if self.roles[p] == "🐺 人狼"]
 
                 if not alive_wolves:
+                    seer_text = f"今回の占い師は **{seer_player.mention}** でした！" if seer_player else ""
                     await self.channel.send(
                         f"🎉 **村人陣営の勝利！**\n"
                         f"人狼を見つけ出して処刑しました！\n"
-                        f"今回の人狼は **{wolf_player.mention}** でした！"
+                        f"今回の人狼は **{wolf_player.mention}** でした！\n"
+                        f"{seer_text}"
                     )
                     break
 
                 if len(self.alive) == 2 and len(alive_wolves) == 1:
+                    seer_text = f"今回の占い師は **{seer_player.mention}** でした！" if seer_player else ""
                     await self.channel.send(
                         f"🐺 **人狼陣営の勝利！**\n"
                         f"生き残ったのは人狼（{alive_wolves[0].mention}）と村人1人のみになりました！\n"
-                        f"今回の人狼は **{wolf_player.mention}** でした！"
+                        f"今回の人狼は **{wolf_player.mention}** でした！\n"
+                        f"{seer_text}"
                     )
                     break
             else:
