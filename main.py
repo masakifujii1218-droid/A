@@ -6,7 +6,10 @@ import threading
 import time
 import asyncio
 import sys
-from google import genai
+from openai import OpenAI
+import os
+
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # 🛠️ 新しいシステム（sub.py）をインポート
 import sub
