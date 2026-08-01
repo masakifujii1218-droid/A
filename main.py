@@ -1097,8 +1097,6 @@ if __name__ == "__main__":
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 1101行目付近にあるこの行を削除する
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # (中略：各コマンドの定義部分)
 
