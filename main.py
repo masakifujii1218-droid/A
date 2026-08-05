@@ -7,7 +7,7 @@ import time
 import asyncio
 import sys
 from openai import OpenAI
-import os
+import requests  # ★セルフ・ピン用に追加
 
 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -50,11 +50,37 @@ def health():
     return "OK", 200
 
 def run_flask():
-    app.run(host="0.0.0.0", port=8080)
+    # Renderが指定するポート（環境変数 PORT）またはデフォルトで8080を使う
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
+
+# ==========================================
+# ★追加：自分自身を定期的に叩いてスリープを防ぐ機能
+# ==========================================
+def self_ping():
+    # あなたのRenderのURL
+    url = "https://mainbot-tuwm.onrender.com/health"
+    
+    while True:
+        try:
+            # 10分ごとに自分にアクセス（15分でスリープするのを防ぎます）
+            time.sleep(600)
+            response = requests.get(url)
+            print(f"Self-ping sent! Status: {response.status_code}")
+        except Exception as e:
+            print(f"Self-ping failed: {e}")
+
+def start_ping_thread():
+    p = threading.Thread(target=self_ping, daemon=True)
+    p.start()
+
+# サーバーとセルフ・ピンを起動
+keep_alive()
+start_ping_thread()
 
 # ==========================================
 # Discord
